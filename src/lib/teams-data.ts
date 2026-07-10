@@ -1,16 +1,23 @@
 import { PHASES, type Phase } from "@/lib/phases";
 
 export type { Phase } from "@/lib/phases";
-export {
-  PHASES,
-  ACTIVE_PHASES,
-  LOST_PHASES,
-  PHASE_COLORS,
-  isLostPhase,
-} from "@/lib/phases";
+export { PHASES, ACTIVE_PHASES, LOST_PHASES, PHASE_COLORS, PHASE_SHORT_LABELS, isLostPhase } from "@/lib/phases";
 
-// 2026 — janeiro a julho (até a data de hoje)
-export const MONTHS = ["01", "02", "03", "04", "05", "06", "07"] as const;
+// Ano-calendário completo: o filtro do webhook limita os registros a 2026.
+export const MONTHS = [
+  "01",
+  "02",
+  "03",
+  "04",
+  "05",
+  "06",
+  "07",
+  "08",
+  "09",
+  "10",
+  "11",
+  "12",
+] as const;
 export type MonthKey = (typeof MONTHS)[number];
 export const MONTH_LABELS: Record<MonthKey, string> = {
   "01": "Jan",
@@ -20,6 +27,11 @@ export const MONTH_LABELS: Record<MonthKey, string> = {
   "05": "Mai",
   "06": "Jun",
   "07": "Jul",
+  "08": "Ago",
+  "09": "Set",
+  "10": "Out",
+  "11": "Nov",
+  "12": "Dez",
 };
 
 export type MonthFilter = "all" | MonthKey;
@@ -181,7 +193,7 @@ export const STATIC_TEAMS: Team[] = [
 export const TEAMS = STATIC_TEAMS;
 
 export const TEAM_ACCENT: Record<string, string> = {
-  elite: "from-indigo-500 to-fuchsia-500",
+  elite: "from-sky-500 to-cyan-400",
   lider: "from-emerald-500 to-teal-500",
   total: "from-amber-500 to-orange-500",
 };

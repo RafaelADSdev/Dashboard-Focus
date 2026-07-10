@@ -9,8 +9,8 @@ colors:
   ink-muted: "oklch(0.70 0.02 260)"
   ink-faint: "oklch(0.55 0.02 260)"
   border: "oklch(1 0 0 / 0.1)"
-  accent-elite-from: "#6366f1"
-  accent-elite-to: "#d946ef"
+  accent-elite-from: "#0ea5e9"
+  accent-elite-to: "#22d3ee"
   accent-lider-from: "#10b981"
   accent-lider-to: "#14b8a6"
   accent-total-from: "#f59e0b"
@@ -53,7 +53,7 @@ typography:
 rounded:
   sm: "0.375rem"
   md: "0.625rem"
-  lg: "1rem"
+  lg: "0.75rem"
   pill: "9999px"
 spacing:
   xs: "0.25rem"
@@ -92,7 +92,7 @@ Filosofia: ferramenta que desaparece na tarefa. Tipografia de sistema, métricas
 
 Canvas slate quase-preto (`canvas` / `surface`) com tinta clara. Neutros carregam 90% da UI.
 
-**Equipes** usam gradientes curtos só em aba ativa e KPI da equipe (Elite índigo→fúcsia, Líder esmeralda→teal, Total âmbar→laranja).
+**Equipes** usam gradientes curtos só em aba ativa e KPI da equipe (Elite sky→cyan, Líder esmeralda→teal, Total âmbar→laranja).
 
 **Fases** são um vocabulário semântico fixo (ver tokens `phase-*`). Perdas (`negocios-perdidos`, `prazos-perdidos`, `loss`) ficam no bloco visual separado — nunca misturadas na mesma barra do funil ativo.
 

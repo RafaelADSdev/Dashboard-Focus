@@ -8,6 +8,7 @@ export type BitrixLead = {
   TITLE?: string;
   STATUS_ID?: string;
   STAGE_ID?: string;
+  CATEGORY_ID?: string;
   ASSIGNED_BY_ID?: string;
   DATE_CREATE?: string;
   DATE_MODIFY?: string;
@@ -19,12 +20,23 @@ export type BitrixUser = {
   LAST_NAME?: string;
   SECOND_NAME?: string;
   PERSONAL_PHOTO?: string | number | boolean | null;
+  UF_DEPARTMENT?: Array<string | number> | string | number;
+};
+
+export type BitrixDepartment = {
+  ID: string | number;
+  NAME: string;
+  PARENT?: string | number;
 };
 
 export type BitrixStatus = {
   STATUS_ID: string;
   NAME: string;
   ENTITY_ID?: string;
+  SEMANTICS?: string | null;
+  EXTRA?: {
+    SEMANTICS?: string | null;
+  };
 };
 
 function webhookBase(): string | null {
@@ -64,15 +76,45 @@ export function userDisplayName(u: BitrixUser): string {
   return [u.NAME, u.SECOND_NAME, u.LAST_NAME].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 }
 
+/** Achata params aninhados no formato que o Bitrix REST espera (filter[>=DATE_CREATE]=...) */
+function flattenBitrixParams(
+  input: Record<string, unknown>,
+  prefix = "",
+  out: Record<string, string> = {},
+): Record<string, string> {
+  for (const [key, value] of Object.entries(input)) {
+    const path = prefix ? `${prefix}[${key}]` : key;
+    if (value == null) continue;
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => {
+        if (v != null && typeof v === "object") {
+          flattenBitrixParams(v as Record<string, unknown>, `${path}[${i}]`, out);
+        } else if (v != null) {
+          out[`${path}[${i}]`] = String(v);
+        }
+      });
+    } else if (typeof value === "object") {
+      flattenBitrixParams(value as Record<string, unknown>, path, out);
+    } else {
+      out[path] = String(value);
+    }
+  }
+  return out;
+}
+
 async function bitrixCall<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   const base = webhookBase();
   if (!base) throw new Error("BITRIX_WEBHOOK_URL não configurada");
 
-  const url = `${base}/${method}.json`;
+  const url = `${base}/${method}`;
+  const body = new URLSearchParams(flattenBitrixParams(params));
   const res = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify(params),
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body,
   });
 
   if (!res.ok) {
@@ -93,48 +135,138 @@ async function bitrixListAll<T>(
 ): Promise<T[]> {
   const all: T[] = [];
   let start = 0;
+  let previousPageSignature = "";
   for (;;) {
-    const batch = await bitrixCall<T[] | { items?: T[] }>(method, { ...params, start });
+    const batch = await bitrixCall<T[] | { items?: T[] }>(method, {
+      ...params,
+      start,
+    });
     const items = Array.isArray(batch) ? batch : (batch?.items ?? []);
+    const pageSignature = items.length
+      ? JSON.stringify([items[0], items[items.length - 1]])
+      : "empty";
+    if (items.length && pageSignature === previousPageSignature) {
+      throw new Error(`Bitrix ${method}: a paginação repetiu a mesma página no start ${start}`);
+    }
+    previousPageSignature = pageSignature;
     all.push(...items);
     if (items.length < 50) break;
     start += 50;
-    if (start > 5000) break; // safety
   }
   return all;
 }
 
+export async function fetchDepartments(): Promise<BitrixDepartment[]> {
+  return bitrixListAll<BitrixDepartment>("department.get", { sort: "ID", order: "ASC" });
+}
+
+export async function fetchUsers(): Promise<BitrixUser[]> {
+  return bitrixListAll<BitrixUser>("user.get", { sort: "ID", order: "ASC" });
+}
+
 export async function fetchLeadStatuses(): Promise<BitrixStatus[]> {
   // STATUS do CRM lead
-  const result = await bitrixCall<BitrixStatus[] | Record<string, BitrixStatus>>("crm.status.list", {
-    filter: { ENTITY_ID: "STATUS" },
-  });
+  const result = await bitrixCall<BitrixStatus[] | Record<string, BitrixStatus>>(
+    "crm.status.list",
+    {
+      filter: { ENTITY_ID: "STATUS" },
+    },
+  );
   if (Array.isArray(result)) return result;
   return Object.values(result ?? {});
 }
 
-export async function fetchDealStages(): Promise<BitrixStatus[]> {
-  const result = await bitrixCall<BitrixStatus[] | Record<string, BitrixStatus>>("crm.status.list", {
-    filter: { ENTITY_ID: "DEAL_STAGE" },
-  });
+export async function fetchDealStages(categoryId = 0): Promise<BitrixStatus[]> {
+  const entityId = categoryId > 0 ? `DEAL_STAGE_${categoryId}` : "DEAL_STAGE";
+  const result = await bitrixCall<BitrixStatus[] | Record<string, BitrixStatus>>(
+    "crm.status.list",
+    {
+      filter: { ENTITY_ID: entityId },
+    },
+  );
   if (Array.isArray(result)) return result;
   return Object.values(result ?? {});
 }
 
-export async function fetchLeadsSince(year: number): Promise<BitrixLead[]> {
-  return bitrixListAll<BitrixLead>("crm.lead.list", {
+/** Intervalo fechado no início e aberto no fim: [year-01-01, year+1-01-01) */
+export function yearDateFilter(year: number): Record<string, string> {
+  return {
+    ">=DATE_CREATE": `${year}-01-01T00:00:00`,
+    "<DATE_CREATE": `${year + 1}-01-01T00:00:00`,
+  };
+}
+
+export function isCreatedInYear(iso: string | undefined, year: number): boolean {
+  if (!iso) return false;
+  // Bitrix: "2026-03-15T12:00:00+03:00" ou "2026-03-15 12:00:00"
+  const m = String(iso).match(/^(\d{4})/);
+  if (m) return Number(m[1]) === year;
+  const d = new Date(iso);
+  return !Number.isNaN(d.getTime()) && d.getFullYear() === year;
+}
+
+export async function fetchLeadsInYear(
+  year: number,
+  assignedByIds?: string[],
+): Promise<BitrixLead[]> {
+  const assignees = assignedByIds
+    ? [...new Set(assignedByIds.map(String).filter(Boolean))]
+    : undefined;
+  if (assignees && assignees.length === 0) return [];
+
+  const items = await bitrixListAll<BitrixLead>("crm.lead.list", {
     select: ["ID", "TITLE", "STATUS_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY"],
-    filter: { ">=DATE_CREATE": `${year}-01-01T00:00:00` },
+    filter: {
+      ...yearDateFilter(year),
+      ...(assignees ? { "@ASSIGNED_BY_ID": assignees } : {}),
+    },
     order: { DATE_CREATE: "ASC" },
   });
+  return items.filter((l) => isCreatedInYear(l.DATE_CREATE, year));
 }
 
-export async function fetchDealsSince(year: number): Promise<BitrixLead[]> {
-  return bitrixListAll<BitrixLead>("crm.deal.list", {
-    select: ["ID", "TITLE", "STAGE_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY"],
-    filter: { ">=DATE_CREATE": `${year}-01-01T00:00:00` },
+export async function fetchDealsInYear(
+  year: number,
+  categoryId?: number,
+  assignedByIds?: string[],
+): Promise<BitrixLead[]> {
+  const assignees = assignedByIds
+    ? [...new Set(assignedByIds.map(String).filter(Boolean))]
+    : undefined;
+  if (assignees && assignees.length === 0) return [];
+
+  const items = await bitrixListAll<BitrixLead>("crm.deal.list", {
+    select: [
+      "ID",
+      "TITLE",
+      "CATEGORY_ID",
+      "STAGE_ID",
+      "ASSIGNED_BY_ID",
+      "DATE_CREATE",
+      "DATE_MODIFY",
+    ],
+    filter: {
+      ...yearDateFilter(year),
+      ...(categoryId != null ? { CATEGORY_ID: categoryId } : {}),
+      ...(assignees ? { "@ASSIGNED_BY_ID": assignees } : {}),
+    },
     order: { DATE_CREATE: "ASC" },
   });
+  return items.filter(
+    (deal) =>
+      isCreatedInYear(deal.DATE_CREATE, year) &&
+      (categoryId == null || Number(deal.CATEGORY_ID) === categoryId),
+  );
+}
+
+/** @deprecated use fetchLeadsInYear */
+export async function fetchLeadsSince(year: number): Promise<BitrixLead[]> {
+  return fetchLeadsInYear(year);
+}
+
+/** @deprecated use fetchDealsInYear */
+export async function fetchDealsSince(year: number): Promise<BitrixLead[]> {
+  return fetchDealsInYear(year);
 }
 
 export async function fetchUsersByIds(ids: string[]): Promise<Map<string, BitrixUser>> {

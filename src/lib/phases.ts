@@ -47,6 +47,18 @@ export function isLostPhase(p: Phase): boolean {
   return LOST_PHASES.includes(p);
 }
 
+/** Rótulos curtos para legendas em painéis estreitos */
+export const PHASE_SHORT_LABELS: Record<Phase, string> = {
+  "Tentativa de Contato": "Tentativa",
+  "Atendimentos Agendados": "Agendados",
+  "Atendimentos Realizados": "Realizados",
+  "Em Atendimento": "Em atendimento",
+  Propostas: "Propostas",
+  "Contratos Assinados": "Contratos",
+  "Negócios Perdidos": "Negócios perdidos",
+  "Prazos Perdidos": "Prazos perdidos",
+};
+
 /** Normaliza nome de etapa do Bitrix → Phase do dashboard */
 export function mapStageToPhase(raw: string | null | undefined): Phase | null {
   if (!raw) return null;
