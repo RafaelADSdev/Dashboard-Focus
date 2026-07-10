@@ -314,7 +314,7 @@ function Overview({
       ))}
 
       <Card className="lg:col-span-6 lg:row-span-4">
-        <div className="flex items-baseline justify-between">
+        <div className="flex shrink-0 items-baseline justify-between">
           <div>
             <h2 className="text-sm font-semibold">Chegada de leads · 2026</h2>
             <p className="text-xs text-slate-500">
@@ -327,32 +327,33 @@ function Overview({
             </p>
           )}
         </div>
-        <div className="mt-4 flex h-[calc(100%-3.5rem)] items-end gap-2">
+        <div className="mt-4 flex min-h-0 flex-1 items-stretch gap-2">
           {trend.map((t) => {
             const empty = t.value === 0;
-            const pct = empty ? 0 : (t.value / trendMax) * 100;
+            const pct = empty ? 0 : Math.max((t.value / trendMax) * 100, 4);
             const active = month === t.month;
             return (
               <button
                 key={t.month}
+                type="button"
                 onClick={() => onPickMonth(active ? "all" : t.month)}
-                className="group flex flex-1 flex-col items-center gap-1"
+                className="group flex min-h-0 flex-1 flex-col items-center gap-1"
               >
                 <span
                   className={
-                    "text-[10px] font-medium tabular-nums " +
+                    "shrink-0 text-[10px] font-medium tabular-nums " +
                     (empty ? "text-slate-700" : "text-slate-400 group-hover:text-white")
                   }
                 >
                   {empty ? "—" : fmt(t.value)}
                 </span>
-                <div className="flex w-full flex-1 items-end">
+                <div className="relative min-h-0 w-full flex-1">
                   {empty ? (
-                    <div className="w-full border-t border-dashed border-slate-700/80" />
+                    <div className="absolute inset-x-0 bottom-0 border-t border-dashed border-slate-700/80" />
                   ) : (
                     <div
                       className={
-                        "w-full rounded-t-md transition " +
+                        "absolute inset-x-0 bottom-0 rounded-t-md transition-[height] duration-300 ease-out " +
                         (active
                           ? "bg-gradient-to-t from-indigo-500 to-fuchsia-400"
                           : "bg-slate-700 group-hover:bg-slate-500")
@@ -363,7 +364,8 @@ function Overview({
                 </div>
                 <span
                   className={
-                    "text-[11px] " + (active ? "font-semibold text-white" : "text-slate-500")
+                    "shrink-0 text-[11px] " +
+                    (active ? "font-semibold text-white" : "text-slate-500")
                   }
                 >
                   {MONTH_LABELS[t.month]}
