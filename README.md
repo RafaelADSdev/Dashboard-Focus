@@ -1,4 +1,4 @@
-# Sales Compass Visual — Focus
+# Dashboard Focus
 
 Dashboard comercial da **Hub ON** para reuniões de panorama das equipes Focus. Consolida leads do Bitrix24 por mês de criação, equipe, fase do funil e corretor — sem abrir o CRM.
 
