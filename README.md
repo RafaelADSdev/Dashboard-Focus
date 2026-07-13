@@ -18,6 +18,7 @@ Gestores comerciais, líderes de equipe e diretoria da Focus (imobiliário / ven
 - **Roster Focus** — corretores que saíram da equipe aparecem em cinza
 - **Identidade visual fixa** — navbar roxa, fundo cinza-claro e cards em Liquid Glass
 - **Dados Bitrix ou fallback local** — usa webhook quando configurado; caso contrário, exibe dados estáticos de demonstração
+- **Proteção contra limite do Bitrix** — cache regional de 15 minutos, dados anteriores por até 6 horas e espera progressiva em respostas HTTP 429
 
 ## Stack
 
@@ -67,6 +68,7 @@ npm run dev
 Abra [http://localhost:8080](http://localhost:8080).
 
 A **primeira carga com Bitrix** pode levar até ~1 minuto (consulta de deals, usuários e departamentos). Uma tela de carregamento é exibida nesse intervalo.
+As cargas seguintes reutilizam o cache da Vercel para evitar consultas repetidas e bloqueios por excesso de requisições.
 
 ### Scripts úteis
 

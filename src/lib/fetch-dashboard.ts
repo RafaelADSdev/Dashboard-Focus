@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { getCache } from "@vercel/functions";
 import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
 import {
   fetchDepartments,
@@ -36,6 +37,17 @@ export type DashboardPayload = {
 
 const YEAR = 2026;
 const DEAL_CATEGORY_ID = 16;
+const DASHBOARD_CACHE_KEY = `dashboard:${YEAR}:category:${DEAL_CATEGORY_ID}`;
+const FRESH_CACHE_MS = 15 * 60 * 1_000;
+const STALE_CACHE_MS = 6 * 60 * 60 * 1_000;
+
+type DashboardCacheEntry = {
+  cachedAt: number;
+  payload: DashboardPayload;
+};
+
+let memoryCache: DashboardCacheEntry | undefined;
+let dashboardRequest: Promise<DashboardPayload> | undefined;
 
 const TARGET_DEPARTMENTS = [
   { teamId: "elite", departmentName: "Focus Elite" },
@@ -309,6 +321,63 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
   return { source: "bitrix", year: YEAR, teams, dealCount: deals.length };
 }
 
+function validCacheEntry(value: unknown): value is DashboardCacheEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<DashboardCacheEntry>;
+  return (
+    typeof entry.cachedAt === "number" &&
+    Boolean(entry.payload) &&
+    entry.payload?.source === "bitrix" &&
+    Array.isArray(entry.payload.teams)
+  );
+}
+
+async function readDashboardCache(): Promise<DashboardCacheEntry | undefined> {
+  if (memoryCache && Date.now() - memoryCache.cachedAt <= STALE_CACHE_MS) {
+    return memoryCache;
+  }
+
+  try {
+    const value = await getCache({ namespace: "sales-compass" }).get(DASHBOARD_CACHE_KEY);
+    if (validCacheEntry(value) && Date.now() - value.cachedAt <= STALE_CACHE_MS) {
+      memoryCache = value;
+      return value;
+    }
+  } catch {
+    // Fora da Vercel, o cache em memória continua atendendo normalmente.
+  }
+  return undefined;
+}
+
+async function writeDashboardCache(payload: DashboardPayload): Promise<void> {
+  const entry: DashboardCacheEntry = { cachedAt: Date.now(), payload };
+  memoryCache = entry;
+
+  try {
+    await getCache({ namespace: "sales-compass" }).set(DASHBOARD_CACHE_KEY, entry, {
+      ttl: STALE_CACHE_MS / 1_000,
+      tags: ["dashboard-focus", `dashboard-focus-${YEAR}`],
+      name: "dashboard-focus-bitrix",
+    });
+  } catch {
+    // Cache regional indisponível: mantém o cache da instância.
+  }
+}
+
+async function loadAndCacheDashboard(): Promise<DashboardPayload> {
+  if (!dashboardRequest) {
+    dashboardRequest = loadFromBitrix();
+  }
+
+  try {
+    const payload = await dashboardRequest;
+    await writeDashboardCache(payload);
+    return payload;
+  } finally {
+    dashboardRequest = undefined;
+  }
+}
+
 export const getDashboardData = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardPayload> => {
     resolveBitrixWebhookUrl();
@@ -321,9 +390,16 @@ export const getDashboardData = createServerFn({ method: "GET" }).handler(
         error: "BITRIX_WEBHOOK_URL não configurada",
       };
     }
+
+    const cached = await readDashboardCache();
+    if (cached && Date.now() - cached.cachedAt <= FRESH_CACHE_MS) {
+      return cached.payload;
+    }
+
     try {
-      return await loadFromBitrix();
+      return await loadAndCacheDashboard();
     } catch (e) {
+      if (cached) return cached.payload;
       const msg = e instanceof Error ? e.message : "Erro ao consultar Bitrix";
       return { source: "unavailable", year: YEAR, teams: emptyRosterFromStatic(), error: msg };
     }

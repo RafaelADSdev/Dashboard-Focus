@@ -99,6 +99,48 @@ function flattenBitrixParams(
   return out;
 }
 
+const BITRIX_REQUEST_INTERVAL_MS = 650;
+const BITRIX_REQUEST_TIMEOUT_MS = 12_000;
+
+let bitrixQueue: Promise<void> = Promise.resolve();
+let nextBitrixRequestAt = 0;
+
+class BitrixHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly retryAfterMs?: number,
+  ) {
+    super(`HTTP ${status}`);
+  }
+}
+
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(value);
+  return Number.isNaN(date) ? undefined : Math.max(0, date - Date.now());
+}
+
+async function scheduleBitrixRequest<T>(request: () => Promise<T>): Promise<T> {
+  const previous = bitrixQueue;
+  let release = () => {};
+  bitrixQueue = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  await previous;
+  const waitMs = Math.max(0, nextBitrixRequestAt - Date.now());
+  if (waitMs) await new Promise((resolve) => setTimeout(resolve, waitMs));
+
+  try {
+    return await request();
+  } finally {
+    nextBitrixRequestAt = Date.now() + BITRIX_REQUEST_INTERVAL_MS;
+    release();
+  }
+}
+
 async function bitrixCall<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
   const base = webhookBase();
   if (!base) throw new Error("BITRIX_WEBHOOK_URL não configurada");
@@ -109,18 +151,20 @@ async function bitrixCall<T>(method: string, params: Record<string, unknown> = {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body,
-        signal: AbortSignal.timeout(120_000),
-      });
+      const res = await scheduleBitrixRequest(() =>
+        fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+            Accept: "application/json",
+          },
+          body,
+          signal: AbortSignal.timeout(BITRIX_REQUEST_TIMEOUT_MS),
+        }),
+      );
 
       if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
+        throw new BitrixHttpError(res.status, retryAfterMs(res.headers.get("retry-after")));
       }
 
       const json = (await res.json()) as {
@@ -134,9 +178,18 @@ async function bitrixCall<T>(method: string, params: Record<string, unknown> = {
       return json.result as T;
     } catch (error) {
       lastError = error;
-      if (attempt < 2) {
-        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
-      }
+      const timedOut = error instanceof Error && error.name === "TimeoutError";
+      const retryableHttp =
+        error instanceof BitrixHttpError && (error.status === 429 || error.status >= 500);
+      const retryableNetwork = error instanceof TypeError;
+      if (attempt >= 2 || timedOut || (!retryableHttp && !retryableNetwork)) break;
+
+      const backoffMs =
+        error instanceof BitrixHttpError && error.status === 429
+          ? Math.max(error.retryAfterMs ?? 0, 2_000 * 2 ** attempt)
+          : 700 * 2 ** attempt;
+      const jitterMs = Math.floor(Math.random() * 250);
+      await new Promise((resolve) => setTimeout(resolve, backoffMs + jitterMs));
     }
   }
 
