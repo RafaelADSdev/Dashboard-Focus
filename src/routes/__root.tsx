@@ -95,7 +95,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         rel: "stylesheet",
         href: appCss,
       },
-      { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
+      { rel: "icon", href: "/hub-on-cor.png", type: "image/png" },
+      { rel: "apple-touch-icon", href: "/hub-on-cor.png" },
     ],
   }),
   shellComponent: RootShell,
@@ -106,7 +107,7 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
 
 function RootShell({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="pt-BR" className="font-sans">
       <head>
         <HeadContent />
       </head>

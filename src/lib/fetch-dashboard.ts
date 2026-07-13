@@ -1,4 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
+import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
 import {
   fetchDepartments,
   fetchDealStages,
@@ -15,7 +16,15 @@ import {
   type BitrixUser,
 } from "@/lib/bitrix";
 import { mapStageToPhase, type Phase } from "@/lib/phases";
-import { MONTHS, STATIC_TEAMS, type Member, type MonthKey, type Team } from "@/lib/teams-data";
+import {
+  MONTHS,
+  STATIC_TEAMS,
+  TEAM_LEADER_NAMES,
+  normalizeMemberName,
+  type Member,
+  type MonthKey,
+  type Team,
+} from "@/lib/teams-data";
 
 export type DashboardPayload = {
   source: "bitrix" | "unavailable";
@@ -35,7 +44,7 @@ const TARGET_DEPARTMENTS = [
 ] as const;
 
 function normalizeName(value: string): string {
-  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/g, " ").trim();
+  return normalizeMemberName(value);
 }
 
 function monthFromDate(iso: string | undefined): MonthKey | null {
@@ -136,29 +145,62 @@ function bump(matrix: Member["matrix"], phase: Phase, month: MonthKey) {
   row[month] = (row[month] ?? 0) + 1;
 }
 
-function emptyRosterFromStatic(): Team[] {
-  return STATIC_TEAMS.map((t) => ({
-    id: t.id,
-    name: t.name,
-    members: t.members.map((m) => ({
-      name: m.name,
-      bitrixId: m.bitrixId,
-      photoUrl: m.photoUrl,
-      matrix: {},
-    })),
-  }));
-}
-
 function ensureMember(team: Team, name: string, bitrixId?: string, photoUrl?: string): Member {
-  let m = team.members.find((x) => x.name.toLowerCase() === name.toLowerCase());
+  const key = normalizeName(name);
+  let m = team.members.find((x) => normalizeName(x.name) === key);
   if (!m) {
-    m = { name, bitrixId, photoUrl, matrix: {} };
+    m = { name, bitrixId, photoUrl, active: true, matrix: {} };
     team.members.push(m);
   } else {
     if (bitrixId) m.bitrixId = bitrixId;
     if (photoUrl) m.photoUrl = photoUrl;
   }
   return m;
+}
+
+function emptyRosterFromStatic(): Team[] {
+  return STATIC_TEAMS.map((t) => ({
+    id: t.id,
+    name: t.name,
+    leader: t.leader ? { ...t.leader } : undefined,
+    members: t.members.map((m) => ({
+      name: m.name,
+      bitrixId: m.bitrixId,
+      photoUrl: m.photoUrl,
+      active: m.active,
+      matrix: {},
+    })),
+  }));
+}
+
+function applyActiveRosterFromBitrix(
+  teams: Team[],
+  users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+): void {
+  const activeByTeam = new Map<string, Set<string>>();
+  for (const user of users.values()) {
+    if (!activeByTeam.has(user.teamId)) activeByTeam.set(user.teamId, new Set());
+    activeByTeam.get(user.teamId)!.add(normalizeName(user.name));
+  }
+
+  for (const team of teams) {
+    const activeNames = activeByTeam.get(team.id) ?? new Set<string>();
+    for (const member of team.members) {
+      member.active = activeNames.has(normalizeName(member.name));
+    }
+  }
+}
+
+function seedRosterFromBitrixUsers(
+  teams: Team[],
+  users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+): void {
+  for (const user of users.values()) {
+    const team = teams.find((candidate) => candidate.id === user.teamId);
+    if (!team) continue;
+    const member = ensureMember(team, user.name, user.id, user.photoUrl);
+    member.active = true;
+  }
 }
 
 function ingestItems(
@@ -213,11 +255,29 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
     });
   }
 
+  for (const team of teams) {
+    const leaderName = TEAM_LEADER_NAMES[team.id];
+    const leader = [...users.values()].find(
+      (candidate) =>
+        candidate.teamId === team.id && normalizeName(candidate.name) === normalizeName(leaderName),
+    );
+    if (!leader) continue;
+    team.leader = {
+      bitrixId: leader.id,
+      name: leader.name,
+      photoUrl: leader.photoUrl,
+    };
+  }
+
   if (users.size === 0) {
     throw new Error(
       "Nenhum usuário dos departamentos Focus Elite, Focus Líder e Focus Total foi retornado pelo webhook",
     );
   }
+
+  seedRosterFromBitrixUsers(teams, users);
+  applyActiveRosterFromBitrix(teams, users);
+
   if (dealStages.length === 0) {
     throw new Error("Nenhuma etapa foi encontrada para o pipeline Comercial Geral (categoria 16)");
   }
@@ -241,8 +301,8 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
 
   const ingestedDeals = ingestItems(deals, stages, teams, users);
   if (ingestedDeals !== deals.length) {
-    throw new Error(
-      `A consulta retornou ${deals.length} deals, mas somente ${ingestedDeals} foram contabilizados`,
+    console.warn(
+      `[dashboard] ${deals.length - ingestedDeals} deal(s) ignorado(s) — data inválida ou responsável fora do Focus`,
     );
   }
 
@@ -251,6 +311,8 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
 
 export const getDashboardData = createServerFn({ method: "GET" }).handler(
   async (): Promise<DashboardPayload> => {
+    resolveBitrixWebhookUrl();
+
     if (!hasBitrixWebhook()) {
       return {
         source: "unavailable",

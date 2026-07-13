@@ -3,6 +3,8 @@
  * Configure BITRIX_WEBHOOK_URL=https://SEU.bitrix24.com.br/rest/1/CODIGO/
  */
 
+import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
+
 export type BitrixLead = {
   ID: string;
   TITLE?: string;
@@ -40,12 +42,7 @@ export type BitrixStatus = {
 };
 
 function webhookBase(): string | null {
-  const raw =
-    (typeof process !== "undefined" && process.env?.BITRIX_WEBHOOK_URL) ||
-    (typeof process !== "undefined" && process.env?.VITE_BITRIX_WEBHOOK_URL) ||
-    "";
-  const base = String(raw).trim().replace(/\/$/, "");
-  return base || null;
+  return resolveBitrixWebhookUrl();
 }
 
 export function hasBitrixWebhook(): boolean {
@@ -108,24 +105,47 @@ async function bitrixCall<T>(method: string, params: Record<string, unknown> = {
 
   const url = `${base}/${method}`;
   const body = new URLSearchParams(flattenBitrixParams(params));
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Accept: "application/json",
-    },
-    body,
-  });
 
-  if (!res.ok) {
-    throw new Error(`Bitrix ${method} falhou: HTTP ${res.status}`);
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Accept: "application/json",
+        },
+        body,
+        signal: AbortSignal.timeout(120_000),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+
+      const json = (await res.json()) as {
+        result?: T;
+        error?: string;
+        error_description?: string;
+      };
+      if (json.error) {
+        throw new Error(json.error_description || json.error);
+      }
+      return json.result as T;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) {
+        await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+      }
+    }
   }
 
-  const json = (await res.json()) as { result?: T; error?: string; error_description?: string };
-  if (json.error) {
-    throw new Error(`Bitrix ${method}: ${json.error_description || json.error}`);
-  }
-  return json.result as T;
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  const cause =
+    lastError instanceof Error && lastError.cause instanceof Error
+      ? ` (${lastError.cause.message})`
+      : "";
+  throw new Error(`Bitrix ${method}: ${message}${cause}`);
 }
 
 /** Lista todos os itens paginando (start += 50) */

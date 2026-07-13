@@ -33,13 +33,13 @@ export const ACTIVE_PHASES: Phase[] = [
 export const LOST_PHASES: Phase[] = ["Negócios Perdidos", "Prazos Perdidos"];
 
 export const PHASE_COLORS: Record<Phase, string> = {
-  "Atendimentos Agendados": "#6366f1",
-  "Atendimentos Realizados": "#0ea5e9",
+  "Atendimentos Agendados": "#7c3aed",
+  "Atendimentos Realizados": "#2563eb",
   "Contratos Assinados": "#10b981",
   "Em Atendimento": "#f59e0b",
   "Negócios Perdidos": "#ef4444",
   "Prazos Perdidos": "#f97316",
-  Propostas: "#8b5cf6",
+  Propostas: "#06b6d4",
   "Tentativa de Contato": "#14b8a6",
 };
 
