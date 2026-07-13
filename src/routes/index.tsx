@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { CalendarDays } from "lucide-react";
 import {
   createContext,
@@ -17,7 +18,7 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { getDashboardData } from "@/lib/fetch-dashboard";
+import { getDashboardData, createPlaceholderDashboard } from "@/lib/fetch-dashboard";
 import {
   ACTIVE_PHASES,
   LOST_PHASES,
@@ -46,23 +47,8 @@ export const Route = createFileRoute("/")({
       },
     ],
   }),
-  loader: async () => getDashboardData(),
-  pendingComponent: DashboardPending,
   component: Dashboard,
 });
-
-function DashboardPending() {
-  return (
-    <div className="dash-pending">
-      <div className="text-center">
-        <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Carregando dashboard…</p>
-        <p className="mt-2 text-xs text-slate-500">
-          Consulta ao Bitrix pode levar até 1 minuto na primeira carga.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 const fmt = (n: number) => n.toLocaleString("pt-BR");
 
@@ -77,8 +63,17 @@ function useMotionTier() {
 const LABEL_CHROME = "dash-label-chrome";
 
 function Dashboard() {
-  const data = Route.useLoaderData();
-  const teams = data.teams ?? [];
+  const placeholder = useMemo(() => createPlaceholderDashboard(), []);
+  const { data, isPending, isFetching } = useQuery({
+    queryKey: ["dashboard", 2026],
+    queryFn: () => getDashboardData(),
+    placeholderData: placeholder,
+    staleTime: 15 * 60 * 1_000,
+    refetchOnWindowFocus: false,
+  });
+  const dashboardData = data ?? placeholder;
+  const teams = dashboardData.teams ?? [];
+  const isInitialLoad = isPending && dashboardData.source === "unavailable" && !dashboardData.error;
   const [teamId, setTeamId] = useState<string>("overview");
   const [month, setMonth] = useState<MonthFilter>("all");
   const [motionTier, setMotionTier] = useState<MotionTier>("full");
@@ -121,12 +116,17 @@ function Dashboard() {
                 </h1>
                 <p className="dashboard-source mt-1 text-xs">
                   Fonte:{" "}
-                  {data.source === "bitrix" ? (
+                  {isInitialLoad ? (
+                    <span className="text-slate-200">Carregando Bitrix…</span>
+                  ) : dashboardData.source === "bitrix" ? (
                     <span className="text-emerald-200">Bitrix (webhook)</span>
                   ) : (
                     <span className="text-amber-200">dados locais</span>
                   )}
-                  {data.error ? <span className="text-red-200"> · {data.error}</span> : null}
+                  {isFetching && !isInitialLoad ? (
+                    <span className="text-slate-300"> · atualizando</span>
+                  ) : null}
+                  {dashboardData.error ? <span className="text-red-200"> · {dashboardData.error}</span> : null}
                 </p>
               </div>
 

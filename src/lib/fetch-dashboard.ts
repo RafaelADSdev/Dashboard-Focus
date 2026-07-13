@@ -1,5 +1,5 @@
 import { createServerFn } from "@tanstack/react-start";
-import { getCache } from "@vercel/functions";
+import { getCache, waitUntil } from "@vercel/functions";
 import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
 import {
   fetchDepartments,
@@ -40,7 +40,8 @@ const DEAL_CATEGORY_ID = 16;
 const DASHBOARD_CACHE_KEY = `dashboard:${YEAR}:category:${DEAL_CATEGORY_ID}`;
 const FRESH_CACHE_MS = 15 * 60 * 1_000;
 const STALE_CACHE_MS = 6 * 60 * 60 * 1_000;
-const CACHE_OPERATION_TIMEOUT_MS = 1_500;
+const CACHE_READ_TIMEOUT_MS = 4_000;
+const CACHE_WRITE_TIMEOUT_MS = 2_000;
 
 type DashboardCacheEntry = {
   cachedAt: number;
@@ -49,6 +50,15 @@ type DashboardCacheEntry = {
 
 let memoryCache: DashboardCacheEntry | undefined;
 let dashboardRequest: Promise<DashboardPayload> | undefined;
+let backgroundRefresh: Promise<void> | undefined;
+
+export function createPlaceholderDashboard(): DashboardPayload {
+  return {
+    source: "unavailable",
+    year: YEAR,
+    teams: emptyRosterFromStatic(),
+  };
+}
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -260,10 +270,12 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
   const base = getWebhookBase()!;
   const teams = emptyRosterFromStatic();
 
-  // Mantém as consultas sequenciais para respeitar o limite de chamadas do Bitrix.
-  const departments = await fetchDepartments();
-  const bitrixUsers = await fetchUsers();
-  const dealStages = await fetchDealStages(DEAL_CATEGORY_ID);
+  // Departamentos, usuários e etapas são independentes; o rate limiter do Bitrix serializa as chamadas.
+  const [departments, bitrixUsers, dealStages] = await Promise.all([
+    fetchDepartments(),
+    fetchUsers(),
+    fetchDealStages(DEAL_CATEGORY_ID),
+  ]);
   const departmentTeams = departmentTeamMap(departments);
   const users = new Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>();
 
@@ -354,7 +366,7 @@ async function readDashboardCache(): Promise<DashboardCacheEntry | undefined> {
   try {
     const value = await withTimeout(
       getCache({ namespace: "sales-compass" }).get(DASHBOARD_CACHE_KEY),
-      CACHE_OPERATION_TIMEOUT_MS,
+      CACHE_READ_TIMEOUT_MS,
     );
     if (validCacheEntry(value) && Date.now() - value.cachedAt <= STALE_CACHE_MS) {
       memoryCache = value;
@@ -377,7 +389,7 @@ async function writeDashboardCache(payload: DashboardPayload): Promise<void> {
         tags: ["dashboard-focus", `dashboard-focus-${YEAR}`],
         name: "dashboard-focus-bitrix",
       }),
-      CACHE_OPERATION_TIMEOUT_MS,
+      CACHE_WRITE_TIMEOUT_MS,
     );
   } catch {
     // Cache regional indisponível: mantém o cache da instância.
@@ -395,6 +407,25 @@ async function loadAndCacheDashboard(): Promise<DashboardPayload> {
     return payload;
   } finally {
     dashboardRequest = undefined;
+  }
+}
+
+function scheduleBackgroundRefresh(): void {
+  if (backgroundRefresh || dashboardRequest) return;
+
+  backgroundRefresh = loadAndCacheDashboard()
+    .then(() => undefined)
+    .catch((error) => {
+      console.warn("[dashboard] atualização em segundo plano falhou:", error);
+    })
+    .finally(() => {
+      backgroundRefresh = undefined;
+    });
+
+  try {
+    waitUntil(backgroundRefresh);
+  } catch {
+    void backgroundRefresh;
   }
 }
 
@@ -416,6 +447,11 @@ export const getDashboardData = createServerFn({ method: "GET" }).handler(
       return cached.payload;
     }
 
+    if (cached) {
+      scheduleBackgroundRefresh();
+      return cached.payload;
+    }
+
     try {
       return await loadAndCacheDashboard();
     } catch (e) {
@@ -425,3 +461,13 @@ export const getDashboardData = createServerFn({ method: "GET" }).handler(
     }
   },
 );
+
+/** Usado pelo cron da Vercel para manter o cache aquecido. */
+export const warmDashboardCache = createServerFn({ method: "GET" }).handler(async () => {
+  resolveBitrixWebhookUrl();
+  if (!hasBitrixWebhook()) {
+    return { ok: false as const, reason: "BITRIX_WEBHOOK_URL não configurada" };
+  }
+  await loadAndCacheDashboard();
+  return { ok: true as const };
+});
