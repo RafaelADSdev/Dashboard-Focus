@@ -142,10 +142,6 @@ DESIGN.md               # Design system documentado
 - [PRODUCT.md](./PRODUCT.md) — propósito, público e princípios de produto
 - [DESIGN.md](./DESIGN.md) — tokens, tipografia e padrões visuais
 
-## Lovable
-
-Este repositório está conectado ao [Lovable](https://lovable.dev). Evite reescrever histórico git já publicado (`force push`, rebase/amend em commits remotos). Commits na branch conectada sincronizam de volta ao editor Lovable.
-
 ---
 
 **Hub ON** · CRECI 1735-J/B
