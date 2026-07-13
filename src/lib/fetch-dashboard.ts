@@ -40,6 +40,7 @@ const DEAL_CATEGORY_ID = 16;
 const DASHBOARD_CACHE_KEY = `dashboard:${YEAR}:category:${DEAL_CATEGORY_ID}`;
 const FRESH_CACHE_MS = 15 * 60 * 1_000;
 const STALE_CACHE_MS = 6 * 60 * 60 * 1_000;
+const CACHE_OPERATION_TIMEOUT_MS = 1_500;
 
 type DashboardCacheEntry = {
   cachedAt: number;
@@ -48,6 +49,20 @@ type DashboardCacheEntry = {
 
 let memoryCache: DashboardCacheEntry | undefined;
 let dashboardRequest: Promise<DashboardPayload> | undefined;
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error("Tempo limite do cache excedido")), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 const TARGET_DEPARTMENTS = [
   { teamId: "elite", departmentName: "Focus Elite" },
@@ -245,11 +260,10 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
   const base = getWebhookBase()!;
   const teams = emptyRosterFromStatic();
 
-  const [departments, bitrixUsers, dealStages] = await Promise.all([
-    fetchDepartments(),
-    fetchUsers(),
-    fetchDealStages(DEAL_CATEGORY_ID),
-  ]);
+  // Mantém as consultas sequenciais para respeitar o limite de chamadas do Bitrix.
+  const departments = await fetchDepartments();
+  const bitrixUsers = await fetchUsers();
+  const dealStages = await fetchDealStages(DEAL_CATEGORY_ID);
   const departmentTeams = departmentTeamMap(departments);
   const users = new Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>();
 
@@ -338,7 +352,10 @@ async function readDashboardCache(): Promise<DashboardCacheEntry | undefined> {
   }
 
   try {
-    const value = await getCache({ namespace: "sales-compass" }).get(DASHBOARD_CACHE_KEY);
+    const value = await withTimeout(
+      getCache({ namespace: "sales-compass" }).get(DASHBOARD_CACHE_KEY),
+      CACHE_OPERATION_TIMEOUT_MS,
+    );
     if (validCacheEntry(value) && Date.now() - value.cachedAt <= STALE_CACHE_MS) {
       memoryCache = value;
       return value;
@@ -354,11 +371,14 @@ async function writeDashboardCache(payload: DashboardPayload): Promise<void> {
   memoryCache = entry;
 
   try {
-    await getCache({ namespace: "sales-compass" }).set(DASHBOARD_CACHE_KEY, entry, {
-      ttl: STALE_CACHE_MS / 1_000,
-      tags: ["dashboard-focus", `dashboard-focus-${YEAR}`],
-      name: "dashboard-focus-bitrix",
-    });
+    await withTimeout(
+      getCache({ namespace: "sales-compass" }).set(DASHBOARD_CACHE_KEY, entry, {
+        ttl: STALE_CACHE_MS / 1_000,
+        tags: ["dashboard-focus", `dashboard-focus-${YEAR}`],
+        name: "dashboard-focus-bitrix",
+      }),
+      CACHE_OPERATION_TIMEOUT_MS,
+    );
   } catch {
     // Cache regional indisponível: mantém o cache da instância.
   }
