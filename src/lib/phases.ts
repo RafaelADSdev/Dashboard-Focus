@@ -3,6 +3,8 @@ export type Phase =
   | "Atendimentos Realizados"
   | "Contratos Assinados"
   | "Em Atendimento"
+  | "Em Quarentena"
+  | "Standby"
   | "Negócios Perdidos"
   | "Prazos Perdidos"
   | "Propostas"
@@ -13,6 +15,8 @@ export const PHASES: Phase[] = [
   "Atendimentos Agendados",
   "Atendimentos Realizados",
   "Em Atendimento",
+  "Em Quarentena",
+  "Standby",
   "Propostas",
   "Contratos Assinados",
   "Negócios Perdidos",
@@ -25,8 +29,45 @@ export const ACTIVE_PHASES: Phase[] = [
   "Atendimentos Agendados",
   "Atendimentos Realizados",
   "Em Atendimento",
+  "Em Quarentena",
+  "Standby",
   "Propostas",
   "Contratos Assinados",
+];
+
+/** Substatus exibidos dentro do card "Status do atendimento" no funil ativo */
+export const ATTENDANCE_STATUS_PHASES: Phase[] = ["Em Quarentena", "Standby"];
+
+export function isAttendanceStatusPhase(phase: Phase): boolean {
+  return (ATTENDANCE_STATUS_PHASES as readonly Phase[]).includes(phase);
+}
+
+export const ATTENDANCE_STATUS_GROUP_LABEL = "Status do atendimento";
+
+export type ActiveFunnelLegendSection = {
+  label: string | null;
+  phases: Phase[];
+};
+
+/** Seções da legenda do funil ativo (Overview e visão por equipe) */
+export const ACTIVE_FUNNEL_LEGEND_SECTIONS: ActiveFunnelLegendSection[] = [
+  {
+    label: null,
+    phases: [
+      "Tentativa de Contato",
+      "Atendimentos Agendados",
+      "Atendimentos Realizados",
+      "Em Atendimento",
+    ],
+  },
+  {
+    label: ATTENDANCE_STATUS_GROUP_LABEL,
+    phases: ATTENDANCE_STATUS_PHASES,
+  },
+  {
+    label: null,
+    phases: ["Propostas", "Contratos Assinados"],
+  },
 ];
 
 /** Perdas — exibidas separadas das demais */
@@ -37,6 +78,8 @@ export const PHASE_COLORS: Record<Phase, string> = {
   "Atendimentos Realizados": "#2563eb",
   "Contratos Assinados": "#10b981",
   "Em Atendimento": "#f59e0b",
+  "Em Quarentena": "#d97706",
+  Standby: "#64748b",
   "Negócios Perdidos": "#ef4444",
   "Prazos Perdidos": "#f97316",
   Propostas: "#06b6d4",
@@ -53,6 +96,8 @@ export const PHASE_SHORT_LABELS: Record<Phase, string> = {
   "Atendimentos Agendados": "Agendados",
   "Atendimentos Realizados": "Realizados",
   "Em Atendimento": "Em atendimento",
+  "Em Quarentena": "Em quarentena",
+  Standby: "Standby",
   Propostas: "Propostas",
   "Contratos Assinados": "Contratos",
   "Negócios Perdidos": "Negócios perdidos",
@@ -75,6 +120,8 @@ export function mapStageToPhase(raw: string | null | undefined): Phase | null {
     [/proposta/, "Propostas"],
     [/atendimento\s*realizad|realizad/, "Atendimentos Realizados"],
     [/atendimento\s*agendad|agendad/, "Atendimentos Agendados"],
+    [/quarentena/, "Em Quarentena"],
+    [/stand\s*-?\s*by|standby/, "Standby"],
     [/em\s*atendimento|atendimento/, "Em Atendimento"],
     [/tentativa|contato|novo|new/, "Tentativa de Contato"],
   ];

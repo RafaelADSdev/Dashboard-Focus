@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { CalendarDays } from "lucide-react";
 import {
   createContext,
+  Fragment,
   useCallback,
   useContext,
   useEffect,
@@ -19,11 +20,15 @@ import {
 import { cn } from "@/lib/utils";
 import { getDashboardData } from "@/lib/fetch-dashboard";
 import {
+  ACTIVE_FUNNEL_LEGEND_SECTIONS,
   ACTIVE_PHASES,
+  ATTENDANCE_STATUS_GROUP_LABEL,
+  ATTENDANCE_STATUS_PHASES,
   LOST_PHASES,
   MONTHS,
   MONTH_LABELS,
   PHASE_COLORS,
+  PHASE_SHORT_LABELS,
   TEAM_ACCENT,
   initials,
   memberActiveTotal,
@@ -357,16 +362,66 @@ function AnimatedDashboardContent({
   );
 }
 
+function PhaseLegendRow({
+  phase,
+  value,
+  total,
+  visible,
+  rowDelay,
+}: {
+  phase: Phase;
+  value: number;
+  total: number;
+  visible: boolean;
+  rowDelay?: number;
+}) {
+  return (
+    <div
+      className={cn(
+        "flex items-center justify-between gap-2",
+        rowDelay !== undefined &&
+          "motion-safe:transition-[opacity,transform] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]",
+        visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1",
+      )}
+      style={rowDelay !== undefined ? { transitionDelay: `${rowDelay}ms` } : undefined}
+    >
+      <span className="flex min-w-0 items-center gap-2">
+        <span
+          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+          style={{ backgroundColor: PHASE_COLORS[phase] }}
+        />
+        <span className="truncate text-slate-600 dark:text-slate-300">
+          {PHASE_SHORT_LABELS[phase]}
+        </span>
+      </span>
+      <span className="tabular-nums text-slate-900 dark:text-white">
+        {value > 0 ? (
+          <>
+            <AnimatedNumber value={value} className="inline" />
+            <span className="ml-1 text-xs text-slate-500 dark:text-slate-400">
+              {total ? ((value / total) * 100).toFixed(0) : 0}%
+            </span>
+          </>
+        ) : (
+          <span className="text-slate-500">—</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
 function PhaseLegend({
   phases,
   totals,
   total,
   animateDelay,
+  sections,
 }: {
   phases: Phase[];
   totals: { phase: Phase; value: number }[];
   total: number;
   animateDelay?: number;
+  sections?: typeof ACTIVE_FUNNEL_LEGEND_SECTIONS;
 }) {
   const motionTier = useMotionTier();
   const effectiveDelay = motionTier === "full" ? animateDelay : undefined;
@@ -388,45 +443,49 @@ function PhaseLegend({
     return () => window.clearTimeout(timer);
   }, [effectiveDelay, total]);
 
+  if (sections) {
+    let rowIndex = 0;
+    return (
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+        {sections.map((section) => (
+          <Fragment key={section.label ?? section.phases.join("|")}>
+            {section.label ? (
+              <p className={cn(LABEL_CHROME, "col-span-2 font-semibold tracking-wider")}>
+                {section.label}
+              </p>
+            ) : null}
+            {section.phases.map((phase) => {
+              const delay = effectiveDelay !== undefined ? rowIndex++ * 45 : undefined;
+              return (
+                <PhaseLegendRow
+                  key={phase}
+                  phase={phase}
+                  value={map.get(phase) ?? 0}
+                  total={total}
+                  visible={visible}
+                  rowDelay={delay}
+                />
+              );
+            })}
+          </Fragment>
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
       {phases.map((phase, index) => {
-        const value = map.get(phase) ?? 0;
+        const delay = effectiveDelay !== undefined ? index * 45 : undefined;
         return (
-          <div
+          <PhaseLegendRow
             key={phase}
-            className={cn(
-              "flex items-center justify-between gap-2",
-              effectiveDelay !== undefined &&
-                "motion-safe:transition-[opacity,transform] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]",
-              visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1",
-            )}
-            style={
-              effectiveDelay !== undefined
-                ? { transitionDelay: `${index * 45}ms` }
-                : undefined
-            }
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <span
-                className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
-                style={{ backgroundColor: PHASE_COLORS[phase] }}
-              />
-              <span className="truncate text-slate-600 dark:text-slate-300">{phase}</span>
-            </span>
-            <span className="tabular-nums text-slate-900 dark:text-white">
-              {value > 0 ? (
-                <>
-                  <AnimatedNumber value={value} className="inline" />
-                  <span className="ml-1 text-xs text-slate-500 dark:text-slate-400">
-                    {total ? ((value / total) * 100).toFixed(0) : 0}%
-                  </span>
-                </>
-              ) : (
-                <span className="text-slate-500">—</span>
-              )}
-            </span>
-          </div>
+            phase={phase}
+            value={map.get(phase) ?? 0}
+            total={total}
+            visible={visible}
+            rowDelay={delay}
+          />
         );
       })}
     </div>
@@ -702,6 +761,7 @@ function Overview({
                 totals={phaseTotals}
                 total={activeSum}
                 animateDelay={560}
+                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
               />
             </div>
           </div>
@@ -789,11 +849,21 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
   const phaseHeaderLabel = (p: Phase) => {
     const map: Partial<Record<Phase, string>> = {
       "Em Atendimento": "Em atendimento",
+      "Em Quarentena": "Em quarentena",
+      Standby: "Standby",
       "Negócios Perdidos": "Neg. perdidos",
       "Prazos Perdidos": "Prazos perd.",
     };
-    return map[p] ?? p;
+    return map[p] ?? PHASE_SHORT_LABELS[p] ?? p;
   };
+
+  const activePhasesBeforeAttendance = ACTIVE_PHASES.slice(
+    0,
+    ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[0]),
+  );
+  const activePhasesAfterAttendance = ACTIVE_PHASES.slice(
+    ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[ATTENDANCE_STATUS_PHASES.length - 1]) + 1,
+  );
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-12 lg:grid-rows-6">
@@ -847,6 +917,7 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
                 totals={phaseTotals}
                 total={activeSum}
                 animateDelay={340}
+                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
               />
             </div>
           </div>
@@ -890,19 +961,46 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
           <table className="w-full min-w-[960px] border-separate border-spacing-0 text-xs">
             <thead className="dash-table-head">
               <tr className="border-b border-slate-200 dark:border-white/10">
-                <th scope="col" className="w-9 border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10">
+                <th
+                  rowSpan={2}
+                  scope="col"
+                  className="w-9 border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10"
+                >
                   #
                 </th>
-                <th scope="col" className="min-w-[11rem] border-b border-slate-200 px-3 py-3 text-left font-medium dark:border-white/10">
+                <th
+                  rowSpan={2}
+                  scope="col"
+                  className="min-w-[11rem] border-b border-slate-200 px-3 py-3 text-left font-medium dark:border-white/10"
+                >
                   Corretor
                 </th>
-                {ACTIVE_PHASES.map((p, phaseIndex) => (
+                {activePhasesBeforeAttendance.map((p) => (
                   <th
                     key={p}
+                    rowSpan={2}
+                    scope="col"
+                    className="border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10"
+                    title={p}
+                  >
+                    {phaseHeaderLabel(p)}
+                  </th>
+                ))}
+                <th
+                  colSpan={ATTENDANCE_STATUS_PHASES.length}
+                  scope="colgroup"
+                  className="border-b border-slate-200 px-2.5 py-2 text-center text-[11px] font-semibold tracking-wide text-slate-600 dark:border-white/10 dark:text-slate-300"
+                >
+                  {ATTENDANCE_STATUS_GROUP_LABEL}
+                </th>
+                {activePhasesAfterAttendance.map((p, phaseIndex) => (
+                  <th
+                    key={p}
+                    rowSpan={2}
                     scope="col"
                     className={cn(
                       "border-b border-slate-200 font-medium dark:border-white/10",
-                      phaseIndex === ACTIVE_PHASES.length - 1
+                      phaseIndex === activePhasesAfterAttendance.length - 1
                         ? BROKER_TABLE_PHASE_LAST
                         : BROKER_TABLE_PHASE,
                     )}
@@ -914,11 +1012,15 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
                 {LOST_PHASES.map((p, phaseIndex) => (
                   <th
                     key={p}
+                    rowSpan={2}
                     scope="col"
                     className={cn(
                       phaseIndex === 0
                         ? NEG_PERD_HEAD
-                        : cn(BROKER_TABLE_LOST, "border-b border-slate-200 font-medium text-slate-500 dark:border-white/10 dark:text-slate-400"),
+                        : cn(
+                            BROKER_TABLE_LOST,
+                            "border-b border-slate-200 font-medium text-slate-500 dark:border-white/10 dark:text-slate-400",
+                          ),
                     )}
                     title={p}
                   >
@@ -926,11 +1028,32 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
                   </th>
                 ))}
                 <th
+                  rowSpan={2}
                   scope="col"
-                  className={cn(BROKER_TABLE_ATIVO, "border-b border-slate-200 font-medium text-slate-600 dark:border-white/10 dark:text-slate-300")}
+                  className={cn(
+                    BROKER_TABLE_ATIVO,
+                    "border-b border-slate-200 font-medium text-slate-600 dark:border-white/10 dark:text-slate-300",
+                  )}
                 >
                   Ativo
                 </th>
+              </tr>
+              <tr className="border-b border-slate-200 dark:border-white/10">
+                {ATTENDANCE_STATUS_PHASES.map((p, phaseIndex) => (
+                  <th
+                    key={p}
+                    scope="col"
+                    className={cn(
+                      "border-b border-slate-200 font-medium dark:border-white/10",
+                      phaseIndex === ATTENDANCE_STATUS_PHASES.length - 1
+                        ? BROKER_TABLE_PHASE_LAST
+                        : BROKER_TABLE_PHASE,
+                    )}
+                    title={p}
+                  >
+                    {phaseHeaderLabel(p)}
+                  </th>
+                ))}
               </tr>
             </thead>
             <tbody>
