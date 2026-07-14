@@ -19,7 +19,10 @@ import {
   SelectTrigger,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { getDashboardData, createPlaceholderDashboard } from "@/lib/fetch-dashboard";
+import {
+  createPlaceholderDashboard,
+  dashboardQueryOptions,
+} from "@/lib/fetch-dashboard";
 import {
   ACTIVE_FUNNEL_LEGEND_SECTIONS,
   ACTIVE_PHASES,
@@ -43,6 +46,8 @@ import {
 } from "@/lib/teams-data";
 
 export const Route = createFileRoute("/")({
+  loader: ({ context: { queryClient } }) =>
+    queryClient.ensureQueryData(dashboardQueryOptions),
   head: () => ({
     meta: [
       { title: "Dashboard Comercial — Focus" },
@@ -69,16 +74,14 @@ const LABEL_CHROME = "dash-label-chrome";
 
 function Dashboard() {
   const placeholder = useMemo(() => createPlaceholderDashboard(), []);
-  const { data, isPending, isFetching } = useQuery({
-    queryKey: ["dashboard", 2026],
-    queryFn: () => getDashboardData(),
+  const { data, isFetching, isError, error } = useQuery({
+    ...dashboardQueryOptions,
     placeholderData: placeholder,
-    staleTime: 15 * 60 * 1_000,
-    refetchOnWindowFocus: false,
   });
   const dashboardData = data ?? placeholder;
   const teams = dashboardData.teams ?? [];
-  const isInitialLoad = isPending && dashboardData.source === "unavailable" && !dashboardData.error;
+  const isInitialLoad =
+    isFetching && dashboardData.source === "unavailable" && !dashboardData.error && !isError;
   const [teamId, setTeamId] = useState<string>("overview");
   const [month, setMonth] = useState<MonthFilter>("all");
   const [motionTier, setMotionTier] = useState<MotionTier>("full");
@@ -131,7 +134,14 @@ function Dashboard() {
                   {isFetching && !isInitialLoad ? (
                     <span className="text-slate-300"> · atualizando</span>
                   ) : null}
-                  {dashboardData.error ? <span className="text-red-200"> · {dashboardData.error}</span> : null}
+                  {dashboardData.error ? (
+                    <span className="text-red-200"> · {dashboardData.error}</span>
+                  ) : isError ? (
+                    <span className="text-red-200">
+                      {" "}
+                      · {error instanceof Error ? error.message : "Falha ao carregar dados"}
+                    </span>
+                  ) : null}
                 </p>
               </div>
 
