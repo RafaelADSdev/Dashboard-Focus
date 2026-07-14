@@ -46,8 +46,9 @@ import {
 } from "@/lib/teams-data";
 
 export const Route = createFileRoute("/")({
-  loader: ({ context: { queryClient } }) =>
-    queryClient.ensureQueryData(dashboardQueryOptions),
+  loader: ({ context: { queryClient } }) => {
+    void queryClient.prefetchQuery(dashboardQueryOptions);
+  },
   head: () => ({
     meta: [
       { title: "Dashboard Comercial — Focus" },

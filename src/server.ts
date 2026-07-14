@@ -44,9 +44,23 @@ function isH3SwallowedErrorBody(body: string): boolean {
   }
 }
 
+async function handleWarmDashboardCron(request: Request): Promise<Response | undefined> {
+  const url = new URL(request.url);
+  if (url.pathname !== "/api/cron/warm-dashboard" || request.method !== "GET") {
+    return undefined;
+  }
+
+  const { warmDashboardCacheHandler } = await import("./lib/fetch-dashboard.server");
+  const result = await warmDashboardCacheHandler();
+  return Response.json(result, { status: result.ok ? 200 : 500 });
+}
+
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
+      const cronResponse = await handleWarmDashboardCron(request);
+      if (cronResponse) return cronResponse;
+
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);
       return await normalizeCatastrophicSsrResponse(response);

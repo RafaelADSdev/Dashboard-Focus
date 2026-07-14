@@ -460,15 +460,6 @@ function unavailablePayload(error: string): DashboardPayload {
   };
 }
 
-async function awaitDashboardLoad(): Promise<DashboardPayload> {
-  try {
-    return await loadAndCacheDashboard();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : "Erro ao consultar Bitrix";
-    return unavailablePayload(msg);
-  }
-}
-
 export async function getDashboardDataImpl(): Promise<DashboardPayload> {
   resolveBitrixWebhookUrl();
 
@@ -487,7 +478,8 @@ export async function getDashboardDataImpl(): Promise<DashboardPayload> {
   }
 
   if (dashboardRequest) {
-    return awaitDashboardLoad();
+    // Não bloqueia visitas nem o screenshot da Vercel enquanto o Bitrix carrega em segundo plano.
+    return createPlaceholderDashboard();
   }
 
   scheduleBackgroundRefresh();
