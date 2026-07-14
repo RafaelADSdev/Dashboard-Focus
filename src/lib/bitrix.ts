@@ -5,6 +5,15 @@
 
 import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
 
+/** Campo personalizado do negócio: "Status do atendimento" (enum) */
+export const BITRIX_ATTENDANCE_STATUS_FIELD = "UF_CRM_1717073472";
+
+/** IDs conhecidos do enum "Status do atendimento" (fallback se crm.deal.fields falhar) */
+export const BITRIX_ATTENDANCE_STATUS_OPTION_IDS = {
+  quarentena: "4128",
+  standby: "2104",
+} as const;
+
 export type BitrixLead = {
   ID: string;
   TITLE?: string;
@@ -14,6 +23,20 @@ export type BitrixLead = {
   ASSIGNED_BY_ID?: string;
   DATE_CREATE?: string;
   DATE_MODIFY?: string;
+  [BITRIX_ATTENDANCE_STATUS_FIELD]?: string | number | BitrixEnumerationValue | null;
+};
+
+export type BitrixEnumerationValue = {
+  ID?: string | number;
+  VALUE?: string;
+};
+
+export type BitrixFieldDefinition = {
+  type?: string;
+  title?: string;
+  listLabel?: string;
+  formLabel?: string;
+  items?: Record<string, BitrixEnumerationValue & { ID: string | number; VALUE: string }>;
 };
 
 export type BitrixUser = {
@@ -261,6 +284,22 @@ export async function fetchDealStages(categoryId = 0): Promise<BitrixStatus[]> {
   return Object.values(result ?? {});
 }
 
+export async function fetchDealFields(): Promise<Record<string, BitrixFieldDefinition>> {
+  const result = await bitrixCall<Record<string, BitrixFieldDefinition>>("crm.deal.fields");
+  return result ?? {};
+}
+
+/** ID da opção de lista (enumeration) no Bitrix */
+export function resolveEnumerationId(raw: unknown): string | null {
+  if (raw == null || raw === "") return null;
+  if (typeof raw === "object") {
+    const value = raw as BitrixEnumerationValue;
+    if (value.ID != null && value.ID !== "") return String(value.ID);
+    return null;
+  }
+  return String(raw);
+}
+
 /** Intervalo fechado no início e aberto no fim: [year-01-01, year+1-01-01) */
 export function yearDateFilter(year: number): Record<string, string> {
   return {
@@ -317,6 +356,7 @@ export async function fetchDealsInYear(
       "ASSIGNED_BY_ID",
       "DATE_CREATE",
       "DATE_MODIFY",
+      BITRIX_ATTENDANCE_STATUS_FIELD,
     ],
     filter: {
       ...yearDateFilter(year),

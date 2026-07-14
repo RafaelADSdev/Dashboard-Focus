@@ -1,7 +1,7 @@
 import { ACTIVE_PHASES, PHASES, type Phase } from "@/lib/phases";
 
 export type { Phase } from "@/lib/phases";
-export { PHASES, ACTIVE_PHASES, LOST_PHASES, PHASE_COLORS, PHASE_SHORT_LABELS, isLostPhase } from "@/lib/phases";
+export { PHASES, ACTIVE_PHASES, LOST_PHASES, PHASE_COLORS, PHASE_SHORT_LABELS, isLostPhase, ATTENDANCE_STATUS_PHASES, ATTENDANCE_STATUS_GROUP_LABEL, ACTIVE_FUNNEL_LEGEND_SECTIONS } from "@/lib/phases";
 
 // Ano-calendário completo: o filtro do webhook limita os registros a 2026.
 export const MONTHS = [

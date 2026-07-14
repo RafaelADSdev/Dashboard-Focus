@@ -2,6 +2,9 @@ import { createServerFn } from "@tanstack/react-start";
 import { getCache, waitUntil } from "@vercel/functions";
 import { resolveBitrixWebhookUrl } from "@/lib/bitrix-env";
 import {
+  BITRIX_ATTENDANCE_STATUS_FIELD,
+  BITRIX_ATTENDANCE_STATUS_OPTION_IDS,
+  fetchDealFields,
   fetchDepartments,
   fetchDealStages,
   fetchDealsInYear,
@@ -9,14 +12,16 @@ import {
   getWebhookBase,
   hasBitrixWebhook,
   isCreatedInYear,
+  resolveEnumerationId,
   resolvePhotoUrl,
   userDisplayName,
   type BitrixDepartment,
+  type BitrixFieldDefinition,
   type BitrixLead,
   type BitrixStatus,
   type BitrixUser,
 } from "@/lib/bitrix";
-import { mapStageToPhase, type Phase } from "@/lib/phases";
+import { isAttendanceStatusPhase, mapStageToPhase, type Phase } from "@/lib/phases";
 import {
   MONTHS,
   STATIC_TEAMS,
@@ -240,11 +245,45 @@ function seedRosterFromBitrixUsers(
   }
 }
 
+function defaultAttendanceStatusPhaseMap(): Map<string, Phase> {
+  return new Map<string, Phase>([
+    [BITRIX_ATTENDANCE_STATUS_OPTION_IDS.quarentena, "Em Quarentena"],
+    [BITRIX_ATTENDANCE_STATUS_OPTION_IDS.standby, "Standby"],
+  ]);
+}
+
+function buildAttendanceStatusPhaseMap(
+  fields: Record<string, BitrixFieldDefinition>,
+): Map<string, Phase> {
+  const field = fields[BITRIX_ATTENDANCE_STATUS_FIELD];
+  const map = new Map<string, Phase>();
+  if (!field?.items) return defaultAttendanceStatusPhaseMap();
+
+  for (const item of Object.values(field.items)) {
+    const phase = mapStageToPhase(item.VALUE);
+    if (phase && isAttendanceStatusPhase(phase)) {
+      map.set(String(item.ID), phase);
+    }
+  }
+
+  return map.size > 0 ? map : defaultAttendanceStatusPhaseMap();
+}
+
+async function resolveAttendanceStatusPhaseMap(): Promise<Map<string, Phase>> {
+  try {
+    return buildAttendanceStatusPhaseMap(await fetchDealFields());
+  } catch (error) {
+    console.warn("[dashboard] crm.deal.fields indisponível; usando IDs fixos de Status do atendimento", error);
+    return defaultAttendanceStatusPhaseMap();
+  }
+}
+
 function ingestItems(
   items: BitrixLead[],
   stages: Map<string, BitrixStatus>,
   teams: Team[],
   users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+  attendanceStatusById: Map<string, Phase>,
 ): number {
   let ingested = 0;
   for (const item of items) {
@@ -261,6 +300,13 @@ function ingestItems(
     if (!team) continue;
     const member = ensureMember(team, user.name, uid, user.photoUrl);
     bump(member.matrix, phase, month);
+
+    const attendanceId = resolveEnumerationId(item[BITRIX_ATTENDANCE_STATUS_FIELD]);
+    const attendancePhase = attendanceId ? attendanceStatusById.get(attendanceId) : null;
+    if (attendancePhase) {
+      bump(member.matrix, attendancePhase, month);
+    }
+
     ingested += 1;
   }
   return ingested;
@@ -320,7 +366,10 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
     throw new Error("Nenhuma etapa foi encontrada para o pipeline Comercial Geral (categoria 16)");
   }
 
-  const deals = await fetchDealsInYear(YEAR, DEAL_CATEGORY_ID, [...users.keys()]);
+  const [deals, attendanceStatusById] = await Promise.all([
+    fetchDealsInYear(YEAR, DEAL_CATEGORY_ID, [...users.keys()]),
+    resolveAttendanceStatusPhaseMap(),
+  ]);
   const stages = statusMap(dealStages, DEAL_CATEGORY_ID);
 
   // Preenche IDs/fotos somente no roster do departamento real do usuário.
@@ -337,7 +386,7 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
     }
   }
 
-  const ingestedDeals = ingestItems(deals, stages, teams, users);
+  const ingestedDeals = ingestItems(deals, stages, teams, users, attendanceStatusById);
   if (ingestedDeals !== deals.length) {
     console.warn(
       `[dashboard] ${deals.length - ingestedDeals} deal(s) ignorado(s) — data inválida ou responsável fora do Focus`,
