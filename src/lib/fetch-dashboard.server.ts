@@ -486,12 +486,6 @@ export async function getDashboardDataImpl(): Promise<DashboardPayload> {
     return cached.payload;
   }
 
-  // Em dev, aguarda o Bitrix na primeira carga — evita placeholder eterno no localhost.
-  if (process.env.NODE_ENV === "development") {
-    return awaitDashboardLoad();
-  }
-
-  // Produção: resposta rápida + polling enquanto o cache aquece.
   if (dashboardRequest) {
     return awaitDashboardLoad();
   }
