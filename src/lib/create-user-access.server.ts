@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { DashboardPageKey } from "@/lib/access-control";
+import type { DashboardPageKey, UserPipelineAccessKey } from "@/lib/access-control";
 import { assertAdministrator, createSupabaseAdminClient } from "@/lib/supabase-admin.server";
 
 export type CreateUserAccessInput = {
@@ -8,6 +8,7 @@ export type CreateUserAccessInput = {
   password: string;
   roleId: string;
   pageKeys: DashboardPageKey[];
+  pipelineKey: UserPipelineAccessKey;
 };
 
 export type CreateUserAccessResult = { error?: string };
@@ -58,24 +59,44 @@ async function findAuthUserIdByEmail(
   return undefined;
 }
 
+function isPipelineMigrationErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("pipeline_key") || normalized.includes("dashboard_pipelines");
+}
+
 async function saveAccessWithServiceRole(
   adminClient: SupabaseClient,
   userId: string,
   email: string,
   roleId: string,
   pageKeys: DashboardPageKey[],
+  pipelineKey: UserPipelineAccessKey,
 ): Promise<CreateUserAccessResult> {
   const { error: profileError } = await adminClient.from("user_profiles").upsert(
     {
       id: userId,
       email,
       role_id: roleId,
+      pipeline_key: pipelineKey,
     },
     { onConflict: "id" },
   );
 
-  if (profileError) {
-    return { error: profileError.message };
+  let profileUpsertError = profileError;
+  if (profileError && isPipelineMigrationErrorMessage(profileError.message)) {
+    const { error: fallbackError } = await adminClient.from("user_profiles").upsert(
+      {
+        id: userId,
+        email,
+        role_id: roleId,
+      },
+      { onConflict: "id" },
+    );
+    profileUpsertError = fallbackError;
+  }
+
+  if (profileUpsertError) {
+    return { error: profileUpsertError.message };
   }
 
   const { error: deleteError } = await adminClient
@@ -181,5 +202,6 @@ export async function createUserAccessImpl(
     normalizedEmail,
     input.roleId,
     input.pageKeys,
+    input.pipelineKey,
   );
 }

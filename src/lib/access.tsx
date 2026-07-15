@@ -9,11 +9,20 @@ import {
 } from "react";
 import {
   DASHBOARD_PAGES,
+  DASHBOARD_PIPELINES,
+  DEFAULT_PIPELINE_KEY,
+  canUserSwitchPipeline,
   isAdministratorRole,
   normalizeRoleRelation,
+  normalizeUserPipelineAccess,
+  resolveDashboardPipeline,
+  teamIdToPageKey,
   type AppRole,
   type DashboardPage,
   type DashboardPageKey,
+  type DashboardPipeline,
+  type DashboardPipelineKey,
+  type UserPipelineAccessKey,
   type ManagedUserAccess,
   type UserProfile,
 } from "@/lib/access-control";
@@ -25,26 +34,33 @@ type AccessContextValue = {
   loading: boolean;
   ready: boolean;
   setupRequired: boolean;
+  pipelineMigrationPending: boolean;
   profile: UserProfile | null;
   roleSlug: string | null;
   isAdministrator: boolean;
   allowedPages: DashboardPageKey[];
+  allowedPipeline: UserPipelineAccessKey;
+  canSwitchPipeline: boolean;
+  pipelines: DashboardPipeline[];
   pages: DashboardPage[];
   roles: AppRole[];
   canAccessPage: (pageKey: DashboardPageKey) => boolean;
   canAccessTeam: (teamId: string) => boolean;
+  canAccessPipeline: (pipelineKey: DashboardPipelineKey) => boolean;
   refreshAccess: () => Promise<void>;
   listManagedUsers: () => Promise<{ data?: ManagedUserAccess[]; error?: string }>;
   saveUserAccess: (
     userId: string,
     roleId: string,
     pageKeys: DashboardPageKey[],
+    pipelineKey: UserPipelineAccessKey,
   ) => Promise<{ error?: string }>;
   createUserAccess: (
     email: string,
     password: string,
     roleId: string,
     pageKeys: DashboardPageKey[],
+    pipelineKey: UserPipelineAccessKey,
   ) => Promise<{ error?: string }>;
   deleteUserAccess: (targetUserId: string) => Promise<{ error?: string }>;
 };
@@ -73,12 +89,48 @@ function isAccessSetupError(error: unknown): boolean {
   return false;
 }
 
+function isPipelineMigrationError(error: unknown): boolean {
+  const message = getErrorMessage(error).toLowerCase();
+  return message.includes("pipeline_key") || message.includes("dashboard_pipelines");
+}
+
+function defaultPipelines(): DashboardPipeline[] {
+  return [
+    ...DASHBOARD_PIPELINES.map((pipeline, index) => ({
+      key: pipeline.key,
+      label: pipeline.label,
+      bitrix_category_id: pipeline.bitrixCategoryId,
+      sort_order: index + 1,
+    })),
+    {
+      key: "ambas",
+      label: "Ambas as esteiras",
+      bitrix_category_id: 0,
+      sort_order: 0,
+    },
+  ];
+}
+
+async function detectPipelineMigrationPending(
+  supabase: ReturnType<typeof getSupabaseClient>,
+): Promise<boolean> {
+  const tableProbe = await supabase.from("dashboard_pipelines").select("key").limit(1);
+  if (!tableProbe.error) return false;
+
+  const columnProbe = await supabase.from("user_profiles").select("pipeline_key").limit(1);
+  if (!columnProbe.error) return false;
+
+  return (
+    isPipelineMigrationError(tableProbe.error) || isPipelineMigrationError(columnProbe.error)
+  );
+}
+
 function parseAdminEmails(): Set<string> {
   const raw = import.meta.env.VITE_ADMIN_EMAILS?.trim() ?? "";
   const defaults = ["rafaelarcanjods@gmail.com", "rafaelarcanjods05@gmail.com"];
   const fromEnv = raw
     .split(",")
-    .map((email) => email.trim().toLowerCase())
+    .map((email: string) => email.trim().toLowerCase())
     .filter(Boolean);
   return new Set([...defaults, ...fromEnv]);
 }
@@ -88,6 +140,7 @@ const ADMIN_EMAILS = parseAdminEmails();
 function createFallbackAccess(userId: string, email?: string | null): {
   profile: UserProfile;
   pageKeys: DashboardPageKey[];
+  pipelineKey: UserPipelineAccessKey;
 } {
   const isAdmin = Boolean(email && ADMIN_EMAILS.has(email.trim().toLowerCase()));
 
@@ -97,18 +150,24 @@ function createFallbackAccess(userId: string, email?: string | null): {
       email: email ?? "",
       full_name: null,
       role_id: "",
+      pipeline_key: DEFAULT_PIPELINE_KEY,
       app_roles: isAdmin
         ? { slug: "administrador", name: "Administrador" }
         : { slug: "lider", name: "Líder" },
     },
     pageKeys: DASHBOARD_PAGES.map((page) => page.key),
+    pipelineKey: DEFAULT_PIPELINE_KEY,
   };
 }
 
 async function fetchCatalog(supabase: ReturnType<typeof getSupabaseClient>) {
-  const [rolesResult, pagesResult] = await Promise.all([
+  const [rolesResult, pagesResult, pipelinesResult] = await Promise.all([
     supabase.from("app_roles").select("id, slug, name, sort_order").order("sort_order"),
     supabase.from("dashboard_pages").select("key, label, sort_order").order("sort_order"),
+    supabase
+      .from("dashboard_pipelines")
+      .select("key, label, bitrix_category_id, sort_order")
+      .order("sort_order"),
   ]);
 
   if (rolesResult.error) throw rolesResult.error;
@@ -117,18 +176,49 @@ async function fetchCatalog(supabase: ReturnType<typeof getSupabaseClient>) {
   return {
     roles: (rolesResult.data ?? []) as AppRole[],
     pages: (pagesResult.data ?? []) as DashboardPage[],
+    pipelines: pipelinesResult.error
+      ? defaultPipelines()
+      : ((pipelinesResult.data ?? []) as DashboardPipeline[]),
   };
 }
 
+async function fetchUserProfiles(supabase: ReturnType<typeof getSupabaseClient>) {
+  const withPipeline = await supabase
+    .from("user_profiles")
+    .select("id, email, full_name, role_id, pipeline_key, app_roles ( slug, name )")
+    .order("email");
+
+  if (!withPipeline.error) {
+    return withPipeline;
+  }
+
+  if (!isPipelineMigrationError(withPipeline.error)) {
+    return withPipeline;
+  }
+
+  return supabase
+    .from("user_profiles")
+    .select("id, email, full_name, role_id, app_roles ( slug, name )")
+    .order("email");
+}
+
 async function fetchMyAccess(userId: string, supabase: ReturnType<typeof getSupabaseClient>) {
-  const [profileResult, pagesResult] = await Promise.all([
-    supabase
-      .from("user_profiles")
-      .select("id, email, full_name, role_id, app_roles ( slug, name )")
-      .eq("id", userId)
-      .maybeSingle(),
-    supabase.from("user_page_access").select("page_key").eq("user_id", userId),
-  ]);
+  const profileQuery = await supabase
+    .from("user_profiles")
+    .select("id, email, full_name, role_id, pipeline_key, app_roles ( slug, name )")
+    .eq("id", userId)
+    .maybeSingle();
+
+  const profileResult =
+    profileQuery.error && isPipelineMigrationError(profileQuery.error)
+      ? await supabase
+          .from("user_profiles")
+          .select("id, email, full_name, role_id, app_roles ( slug, name )")
+          .eq("id", userId)
+          .maybeSingle()
+      : profileQuery;
+
+  const pagesResult = await supabase.from("user_page_access").select("page_key").eq("user_id", userId);
 
   if (profileResult.error) throw profileResult.error;
   if (pagesResult.error) throw pagesResult.error;
@@ -141,6 +231,7 @@ async function fetchMyAccess(userId: string, supabase: ReturnType<typeof getSupa
   return {
     profile,
     pageKeys: (pagesResult.data ?? []).map((row) => row.page_key as DashboardPageKey),
+    pipelineKey: normalizeUserPipelineAccess(profile?.pipeline_key),
   };
 }
 
@@ -158,10 +249,13 @@ export function AccessProvider({
   const [loading, setLoading] = useState(isSupabaseConfigured);
   const [ready, setReady] = useState(false);
   const [setupRequired, setSetupRequired] = useState(false);
+  const [pipelineMigrationPending, setPipelineMigrationPending] = useState(false);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [allowedPages, setAllowedPages] = useState<DashboardPageKey[]>([]);
+  const [allowedPipeline, setAllowedPipeline] = useState<UserPipelineAccessKey>(DEFAULT_PIPELINE_KEY);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [pages, setPages] = useState<DashboardPage[]>(DASHBOARD_PAGES as unknown as DashboardPage[]);
+  const [pipelines, setPipelines] = useState<DashboardPipeline[]>(defaultPipelines());
 
   const refreshAccess = useCallback(async () => {
     if (!isSupabaseConfigured) {
@@ -178,10 +272,14 @@ export function AccessProvider({
       const catalog = await fetchCatalog(supabase);
       setRoles(catalog.roles);
       setPages(catalog.pages);
+      setPipelines(catalog.pipelines);
+
+      setPipelineMigrationPending(await detectPipelineMigrationPending(supabase));
 
       const mine = await fetchMyAccess(userId, supabase);
       setProfile(mine.profile);
       setAllowedPages(mine.pageKeys);
+      setAllowedPipeline(mine.pipelineKey);
       setSetupRequired(false);
       setReady(true);
     } catch (error) {
@@ -189,6 +287,7 @@ export function AccessProvider({
         const fallback = createFallbackAccess(userId, userEmail);
         setProfile(fallback.profile);
         setAllowedPages(fallback.pageKeys);
+        setAllowedPipeline(fallback.pipelineKey);
         setSetupRequired(false);
         setReady(true);
         return;
@@ -209,17 +308,26 @@ export function AccessProvider({
 
   const roleSlug = normalizeRoleRelation(profile?.app_roles ?? null)?.slug ?? null;
   const isAdministrator = isAdministratorRole(roleSlug);
+  const canSwitchPipeline = canUserSwitchPipeline(roleSlug, allowedPipeline);
 
   const canAccessPage = useCallback(
     (pageKey: DashboardPageKey) => allowedPages.includes(pageKey),
     [allowedPages],
   );
 
+  const canAccessPipeline = useCallback(
+    (pipelineKey: DashboardPipelineKey) => {
+      if (canSwitchPipeline) return true;
+      return allowedPipeline === pipelineKey;
+    },
+    [allowedPipeline, canSwitchPipeline],
+  );
+
   const canAccessTeam = useCallback(
     (teamId: string) => {
       if (teamId === "overview") return canAccessPage("overview");
-      const pageKey = `team:${teamId}` as DashboardPageKey;
-      return canAccessPage(pageKey);
+      const pageKey = teamIdToPageKey(teamId);
+      return pageKey ? canAccessPage(pageKey) : false;
     },
     [canAccessPage],
   );
@@ -230,10 +338,7 @@ export function AccessProvider({
     }
 
     const supabase = getSupabaseClient();
-    const { data: profiles, error: profilesError } = await supabase
-      .from("user_profiles")
-      .select("id, email, full_name, role_id, app_roles ( slug, name )")
-      .order("email");
+    const { data: profiles, error: profilesError } = await fetchUserProfiles(supabase);
 
     if (profilesError) {
       return { error: profilesError.message };
@@ -262,6 +367,7 @@ export function AccessProvider({
       return {
         ...profile,
         page_keys: pagesByUser.get(item.id) ?? [],
+        pipeline_key: normalizeUserPipelineAccess(profile.pipeline_key),
       };
     });
 
@@ -269,7 +375,12 @@ export function AccessProvider({
   }, [isAdministrator]);
 
   const saveUserAccess = useCallback(
-    async (targetUserId: string, roleId: string, pageKeys: DashboardPageKey[]) => {
+    async (
+      targetUserId: string,
+      roleId: string,
+      pageKeys: DashboardPageKey[],
+      pipelineKey: UserPipelineAccessKey,
+    ) => {
       if (!isAdministrator) {
         return { error: "Apenas administradores podem alterar acessos." };
       }
@@ -282,11 +393,20 @@ export function AccessProvider({
 
       const { error: profileError } = await supabase
         .from("user_profiles")
-        .update({ role_id: roleId })
+        .update({ role_id: roleId, pipeline_key: pipelineKey })
         .eq("id", targetUserId);
 
-      if (profileError) {
-        return { error: profileError.message };
+      let profileUpdateError = profileError;
+      if (profileError && isPipelineMigrationError(profileError)) {
+        const { error: fallbackError } = await supabase
+          .from("user_profiles")
+          .update({ role_id: roleId })
+          .eq("id", targetUserId);
+        profileUpdateError = fallbackError;
+      }
+
+      if (profileUpdateError) {
+        return { error: profileUpdateError.message };
       }
 
       const { error: deleteError } = await supabase
@@ -324,6 +444,7 @@ export function AccessProvider({
       password: string,
       roleId: string,
       pageKeys: DashboardPageKey[],
+      pipelineKey: UserPipelineAccessKey,
     ) => {
       if (!isAdministrator) {
         return { error: "Apenas administradores podem criar acessos." };
@@ -357,6 +478,7 @@ export function AccessProvider({
           password,
           roleId,
           pageKeys,
+          pipelineKey,
         },
       });
 
@@ -405,14 +527,19 @@ export function AccessProvider({
       loading,
       ready,
       setupRequired,
+      pipelineMigrationPending,
       profile,
       roleSlug,
       isAdministrator,
       allowedPages,
+      allowedPipeline,
+      canSwitchPipeline,
+      pipelines,
       pages,
       roles,
       canAccessPage,
       canAccessTeam,
+      canAccessPipeline,
       refreshAccess,
       listManagedUsers,
       saveUserAccess,
@@ -423,14 +550,19 @@ export function AccessProvider({
       loading,
       ready,
       setupRequired,
+      pipelineMigrationPending,
       profile,
       roleSlug,
       isAdministrator,
       allowedPages,
+      allowedPipeline,
+      canSwitchPipeline,
+      pipelines,
       pages,
       roles,
       canAccessPage,
       canAccessTeam,
+      canAccessPipeline,
       refreshAccess,
       listManagedUsers,
       saveUserAccess,

@@ -10,15 +10,29 @@ Gestores comerciais, líderes de equipe e diretoria da Focus (imobiliário / ven
 
 ## Funcionalidades
 
+### Dashboard
+
 - **Visão Geral** — KPIs do funil ativo, gráfico de chegada de leads por mês e distribuição por fase
-- **Equipes Focus** — abas **Elite**, **Líder** e **Total** com detalhe por corretor
+- **Duas esteiras Bitrix** — **Comercial Geral** (categoria 16) e **Econômico** (categoria 64), com alternância no header para perfis autorizados
+- **Equipes por esteira**
+  - *Comercial Geral:* Focus Elite, Focus Líder, Focus Total
+  - *Econômico:* Focus Elite, subequipes de **Focus Primeira Chave** (Imparáveis, Domina, Legado, Lobos) e Focus Total
 - **Liderança das equipes** — cards exibem nome e foto circular da líder, carregada do perfil no Bitrix
 - **Filtro de período** — ano todo, mês atual, pico ou mês específico (por data de criação do lead)
 - **Funil ativo vs. perdas** — Negócios Perdidos e Prazos Perdidos separados visualmente do funil ativo
+- **Status do atendimento** — quarentena e standby do campo customizado Bitrix
 - **Roster Focus** — corretores que saíram da equipe aparecem em cinza
 - **Identidade visual fixa** — navbar roxa, fundo cinza-claro e cards em Liquid Glass
 - **Dados Bitrix ou fallback local** — usa webhook quando configurado; caso contrário, exibe dados estáticos de demonstração
 - **Proteção contra limite do Bitrix** — cache regional de 15 minutos, dados anteriores por até 6 horas e espera progressiva em respostas HTTP 429
+
+### Autenticação e acesso
+
+- **Login** via Supabase Auth (e-mail e senha)
+- **Papéis:** Superintendente, Administrador, Diretor e Líder
+- **Gestão de acesso** (administradores) — criar, editar e excluir usuários; definir visão, páginas e esteira por pessoa
+- **Esteira por usuário:** Comercial Geral, Econômico ou **Ambas as esteiras**
+- **Alternância de esteira** no dashboard para Superintendente, Administrador e usuários com acesso às duas esteiras
 
 ## Stack
 
@@ -27,19 +41,21 @@ Gestores comerciais, líderes de equipe e diretoria da Focus (imobiliário / ven
 | Framework | [TanStack Start](https://tanstack.com/start) + React 19 |
 | Roteamento | TanStack Router (file-based) |
 | Estilo | Tailwind CSS 4, shadcn/ui, Plus Jakarta Sans |
+| Auth / acesso | Supabase Auth + Postgres (RLS) |
 | Dados | Server Functions + API REST Bitrix24 (webhook) |
-| Build / deploy | Vite 8, Nitro (preset Cloudflare Workers) |
+| Build / deploy | Vite 8, Vercel (Nitro) |
 
 ## Pré-requisitos
 
 - **Node.js** 20+ (ou Bun)
+- Projeto **Supabase** com migrations aplicadas (ver abaixo)
 - Webhook de entrada do Bitrix24 com permissão para CRM (deals, usuários, departamentos, etapas)
 
 ## Instalação
 
 ```bash
-git clone <url-do-repositorio>
-cd sales-compass-visual-main
+git clone https://github.com/Hub-On-Tecnologia/dashboard-comercial-focus.git
+cd dashboard-comercial-focus
 npm install
 ```
 
@@ -48,16 +64,68 @@ npm install
 Crie um arquivo `.env.local` na raiz do projeto:
 
 ```env
+# Bitrix
 BITRIX_WEBHOOK_URL=https://SEU_PORTAL.bitrix24.com.br/rest/1/SEU_CODIGO/
+
+# Supabase (login e gestão de acesso)
+VITE_SUPABASE_URL=https://SEU_PROJETO.supabase.co
+VITE_SUPABASE_ANON_KEY=sua_chave_anon
+
+# Servidor (criação de usuários pelo admin — não expor no cliente)
+SUPABASE_SERVICE_ROLE_KEY=sua_service_role_key
+
+# E-mails com bootstrap de administrador (opcional, separados por vírgula)
+VITE_ADMIN_EMAILS=admin@empresa.com
 ```
 
 | Variável | Obrigatória | Descrição |
 |----------|-------------|-----------|
-| `BITRIX_WEBHOOK_URL` | Não* | URL base do webhook Bitrix (com barra final opcional) |
+| `BITRIX_WEBHOOK_URL` | Não* | URL base do webhook Bitrix |
+| `VITE_SUPABASE_URL` | Sim** | URL do projeto Supabase |
+| `VITE_SUPABASE_ANON_KEY` | Sim** | Chave anon/public do Supabase |
+| `SUPABASE_SERVICE_ROLE_KEY` | Sim† | Service role para criar usuários no Auth (server only) |
+| `VITE_ADMIN_EMAILS` | Não | E-mails extras com perfil administrador no bootstrap |
 
-\* Sem essa variável o app sobe normalmente, mas usa **dados locais** e exibe aviso no header.
+\* Sem `BITRIX_WEBHOOK_URL` o app sobe com **dados locais** de demonstração.
 
-> **Segurança:** nunca commite `.env` ou `.env.local`. O webhook dá acesso à API do Bitrix — trate como segredo.
+\** Necessário para login e controle de acesso.
+
+† Necessário para a tela de **Gestão de acesso** criar contas.
+
+> **Segurança:** nunca commite `.env` ou `.env.local`. Webhook e service role dão acesso amplo — trate como segredo.
+
+### Sincronizar env com a Vercel
+
+```bash
+npm run vercel:env:pull
+npm run vercel:supabase:sync
+```
+
+## Banco de dados (Supabase)
+
+As migrations ficam em `supabase/migrations/`. Para aplicar no SQL Editor do Supabase:
+
+```bash
+node scripts/print-access-migration.mjs
+```
+
+Ordem dos arquivos:
+
+1. `20260715103000_access_control.sql` — papéis, perfis e páginas
+2. `20260715120000_dashboard_pipelines.sql` — esteiras e coluna `pipeline_key`
+3. `20260715130000_pipeline_access_ambas.sql` — opção “Ambas as esteiras”
+
+Validar após aplicar:
+
+```bash
+node scripts/verify-access-setup.mjs seu@email.com
+```
+
+Configurar service role localmente:
+
+```bash
+npm run supabase:service-role -- SUA_SERVICE_ROLE_KEY
+```
 
 ## Desenvolvimento
 
@@ -67,49 +135,51 @@ npm run dev
 
 Abra [http://localhost:8080](http://localhost:8080).
 
-A **primeira carga com Bitrix** pode levar até ~1 minuto (consulta de deals, usuários e departamentos). Uma tela de carregamento é exibida nesse intervalo.
-As cargas seguintes reutilizam o cache da Vercel para evitar consultas repetidas e bloqueios por excesso de requisições.
+A **primeira carga com Bitrix** pode levar até ~1 minuto (consulta de deals, usuários e departamentos). Uma tela de carregamento é exibida nesse intervalo. As cargas seguintes reutilizam cache para evitar bloqueios por excesso de requisições.
 
 ### Scripts úteis
 
 | Comando | Descrição |
 |---------|-----------|
 | `npm run dev` | Servidor de desenvolvimento |
-| `npm run build` | Build de produção (`.output/`) |
+| `npm run build` | Build de produção |
 | `npm run preview` | Preview do build local |
 | `npm run lint` | ESLint |
 | `npm run format` | Prettier |
+| `npm run vercel:prod` | Deploy de produção na Vercel |
+| `node scripts/print-access-migration.mjs` | Imprime SQL das migrations de acesso |
+| `node scripts/verify-access-setup.mjs <email>` | Valida tabelas e perfil no Supabase |
 
 ## Build e deploy
 
 ```bash
 npm run build
+npm run vercel:prod
 ```
 
-O artefato fica em `.output/`. Com Nitro + Cloudflare:
+Configure no painel da Vercel (ou via `vercel env`):
 
-```bash
-npx nitro deploy --prebuilt
-```
+- `BITRIX_WEBHOOK_URL`
+- `VITE_SUPABASE_URL`
+- `VITE_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `VITE_ADMIN_EMAILS` (opcional)
 
-Configure `BITRIX_WEBHOOK_URL` no painel do provedor (Cloudflare Workers / variáveis de ambiente do deploy). O `vite.config.ts` já declara essa variável para o runtime Nitro.
-
-Scripts alternativos no `package.json` apontam para Vercel (`vercel:deploy`, `vercel:prod`), se preferir esse fluxo.
+O `vite.config.ts` declara essas variáveis para o runtime do servidor.
 
 ## Integração Bitrix
 
-O loader em `src/lib/fetch-dashboard.ts` orquestra:
+O loader em `src/lib/fetch-dashboard.server.ts` orquestra, por esteira:
 
-1. Departamentos **Focus Elite**, **Focus Líder** e **Focus Total** (incluindo subdepartamentos)
+1. Departamentos das equipes Focus (incluindo subdepartamentos de **Focus Primeira Chave** na esteira Econômico)
 2. Usuários vinculados a esses departamentos, incluindo `PERSONAL_PHOTO`
-3. Deals do pipeline **Comercial Geral** (categoria `16`) criados em **2026**
+3. Deals do pipeline da esteira ativa, criados em **2026**
 4. Mapeamento de etapas → fases do funil (`src/lib/phases.ts`)
 
 Regras de negócio importantes:
 
 - Contagem por **mês de `DATE_CREATE`** do deal
 - Mês sem leads fica **em branco** no gráfico (não inventa zeros)
-- Apenas responsáveis dos três departamentos Focus entram no painel
 - Perdas não entram no total do funil ativo
 - Líderes definidas: **Marianna Queiroz Rosal** (Elite), **Rafaela Góes** (Líder) e **Carol Mello** (Total)
 - A foto da líder vem do webhook; quando indisponível, o card exibe suas iniciais
@@ -119,24 +189,25 @@ Regras de negócio importantes:
 ```
 src/
 ├── routes/
-│   ├── __root.tsx      # Shell HTML, meta, favicon
-│   └── index.tsx       # Dashboard principal
+│   ├── __root.tsx              # Shell HTML, meta, favicon
+│   └── index.tsx               # Dashboard + alternância de esteiras
 ├── lib/
-│   ├── bitrix.ts       # Cliente REST Bitrix24
-│   ├── bitrix-env.ts   # Resolução de BITRIX_WEBHOOK_URL
-│   ├── fetch-dashboard.ts  # Server function do loader
-│   ├── phases.ts       # Fases do funil e cores
-│   └── teams-data.ts   # Equipes, roster e agregações
+│   ├── access-control.ts       # Papéis, páginas, esteiras e regras
+│   ├── access.tsx              # Provider de permissões (cliente)
+│   ├── auth.tsx                # Sessão Supabase
+│   ├── bitrix.ts               # Cliente REST Bitrix24
+│   ├── fetch-dashboard.server.ts
+│   ├── create-user-access.server.ts
+│   └── teams-data.ts           # Equipes, roster e agregações
 ├── components/
-│   └── ui/             # Componentes shadcn/ui
-├── styles.css          # Design tokens e utilitários do dashboard
-└── server.ts           # Wrapper SSR de erros
-
+│   ├── login-screen.tsx
+│   ├── access-management-screen.tsx
+│   └── ui/                     # Componentes shadcn/ui
+├── styles.css
+supabase/migrations/            # SQL de auth e controle de acesso
+scripts/                        # Utilitários de setup e verificação
 public/
-└── hub-on-cor.png      # Logo e favicon
-
-PRODUCT.md              # Contexto de produto e usuários
-DESIGN.md               # Design system documentado
+└── hub-on-cor.png
 ```
 
 ## Documentação adicional

@@ -1,7 +1,7 @@
 import { ArrowLeft, Loader2, Save, Shield, Trash2, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { DashboardPageKey, ManagedUserAccess } from "@/lib/access-control";
-import { DASHBOARD_PAGES, normalizeRoleRelation } from "@/lib/access-control";
+import type { DashboardPageKey, ManagedUserAccess, UserPipelineAccessKey } from "@/lib/access-control";
+import { DASHBOARD_PAGES, DEFAULT_PIPELINE_KEY, normalizeRoleRelation, pipelineAccessOptions } from "@/lib/access-control";
 import { useAccess } from "@/lib/access";
 import {
   Select,
@@ -14,13 +14,12 @@ import { cn } from "@/lib/utils";
 type DraftAccess = {
   roleId: string;
   pageKeys: Set<DashboardPageKey>;
+  pipelineKey: UserPipelineAccessKey;
 };
 
 type AccessManagementScreenProps = {
   onBack: () => void;
 };
-
-const defaultNewPageKeys = () => new Set<DashboardPageKey>(["overview"]);
 
 function PageCheckboxGrid({
   pages,
@@ -64,8 +63,53 @@ function PageCheckboxGrid({
   );
 }
 
+const defaultNewPageKeys = () => new Set<DashboardPageKey>(["overview"]);
+
+function PipelineRadioGrid({
+  pipelines,
+  selected,
+  onChange,
+  idPrefix,
+}: {
+  pipelines: { key: UserPipelineAccessKey; label: string }[];
+  selected: UserPipelineAccessKey;
+  onChange: (pipelineKey: UserPipelineAccessKey) => void;
+  idPrefix: string;
+}) {
+  return (
+    <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {pipelines.map((pipeline) => {
+        const checked = selected === pipeline.key;
+        const inputId = `${idPrefix}-${pipeline.key}`;
+        return (
+          <label
+            key={pipeline.key}
+            htmlFor={inputId}
+            className={cn(
+              "flex cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 text-sm",
+              checked
+                ? "border-violet-300 bg-violet-50 text-violet-900"
+                : "border-slate-200 bg-white text-slate-700",
+            )}
+          >
+            <input
+              id={inputId}
+              type="radio"
+              name={`${idPrefix}-pipeline`}
+              className="h-4 w-4 border-slate-300"
+              checked={checked}
+              onChange={() => onChange(pipeline.key)}
+            />
+            <span>{pipeline.label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
 export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) {
-  const { pages, roles, profile, listManagedUsers, saveUserAccess, createUserAccess, deleteUserAccess } =
+  const { pages, pipelines, roles, profile, pipelineMigrationPending, listManagedUsers, saveUserAccess, createUserAccess, deleteUserAccess } =
     useAccess();
   const [users, setUsers] = useState<ManagedUserAccess[]>([]);
   const [drafts, setDrafts] = useState<Record<string, DraftAccess>>({});
@@ -80,8 +124,10 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
   const [newPassword, setNewPassword] = useState("");
   const [newRoleId, setNewRoleId] = useState("");
   const [newPageKeys, setNewPageKeys] = useState<Set<DashboardPageKey>>(defaultNewPageKeys);
+  const [newPipelineKey, setNewPipelineKey] = useState<UserPipelineAccessKey>(DEFAULT_PIPELINE_KEY);
 
   const catalogPages = pages.length > 0 ? pages : DASHBOARD_PAGES;
+  const catalogPipelines = pipelineAccessOptions(pipelines);
   const defaultRoleId = roles.find((role) => role.slug === "lider")?.id ?? roles[0]?.id ?? "";
 
   const loadUsers = useCallback(async () => {
@@ -105,6 +151,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
           {
             roleId: user.role_id,
             pageKeys: new Set(user.page_keys),
+            pipelineKey: user.pipeline_key,
           },
         ]),
       ),
@@ -130,6 +177,17 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
       [userId]: {
         ...current[userId],
         roleId,
+      },
+    }));
+    setSuccess(null);
+  }
+
+  function updatePipeline(userId: string, pipelineKey: UserPipelineAccessKey) {
+    setDrafts((current) => ({
+      ...current,
+      [userId]: {
+        ...current[userId],
+        pipelineKey,
       },
     }));
     setSuccess(null);
@@ -171,7 +229,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
     setError(null);
     setSuccess(null);
 
-    const result = await saveUserAccess(user.id, draft.roleId, [...draft.pageKeys]);
+    const result = await saveUserAccess(user.id, draft.roleId, [...draft.pageKeys], draft.pipelineKey);
     if (result.error) {
       setError(result.error);
       setSavingUserId(null);
@@ -198,6 +256,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
       newPassword,
       newRoleId,
       [...newPageKeys],
+      newPipelineKey,
     );
 
     if (result.error) {
@@ -210,6 +269,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
     setNewEmail("");
     setNewPassword("");
     setNewPageKeys(defaultNewPageKeys());
+    setNewPipelineKey(DEFAULT_PIPELINE_KEY);
     setNewRoleId(defaultRoleId);
     await loadUsers();
     setCreating(false);
@@ -252,7 +312,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
                 Gestão de acesso
               </h1>
               <p className="mt-1 text-sm text-white/75">
-                Crie, edite ou exclua acessos. Ajuste a visão e as páginas de cada usuário.
+                Crie, edite ou exclua acessos. Ajuste a visão, a esteira e as páginas de cada usuário.
               </p>
             </div>
             <button
@@ -265,6 +325,15 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
             </button>
           </div>
         </header>
+
+        {pipelineMigrationPending ? (
+          <p className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            A esteira por usuário ainda não está disponível neste banco. Visão e páginas funcionam
+            normalmente. Se já executou o SQL, recarregue a página. Caso contrário, rode{" "}
+            <code className="rounded bg-amber-100 px-1 py-0.5">node scripts/print-access-migration.mjs</code>{" "}
+            e aplique as migrations pendentes no SQL Editor do Supabase.
+          </p>
+        ) : null}
 
         {error ? (
           <p className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -282,9 +351,9 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
             <UserPlus className="h-5 w-5 text-violet-700" aria-hidden />
             Novo acesso
           </h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Cria a conta no Supabase Auth e define visão e páginas. Senha mínima: 6 caracteres.
-          </p>
+              <p className="mt-1 text-sm text-slate-500">
+                Cria a conta no Supabase Auth e define visão, esteira e páginas. Senha mínima: 6 caracteres.
+              </p>
 
           {roles.length === 0 ? (
             <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -339,6 +408,18 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+
+              <div>
+                <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                  Esteira do dashboard
+                </p>
+                <PipelineRadioGrid
+                  pipelines={catalogPipelines}
+                  selected={newPipelineKey}
+                  onChange={setNewPipelineKey}
+                  idPrefix="new-access"
+                />
               </div>
 
               <div>
@@ -438,6 +519,18 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
                           </SelectContent>
                         </Select>
                       </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <p className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+                        Esteira do dashboard
+                      </p>
+                      <PipelineRadioGrid
+                        pipelines={catalogPipelines}
+                        selected={draft?.pipelineKey ?? user.pipeline_key}
+                        onChange={(pipelineKey) => updatePipeline(user.id, pipelineKey)}
+                        idPrefix={`user-${user.id}`}
+                      />
                     </div>
 
                     <div className="mt-4">

@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, LogOut, Shield } from "lucide-react";
+import { Filter, LogOut, Repeat2, Shield } from "lucide-react";
 import {
   createContext,
   Fragment,
@@ -20,6 +20,14 @@ import {
 } from "@/components/access-management-screen";
 import { useAuth } from "@/lib/auth";
 import { AccessProvider, useAccess } from "@/lib/access";
+import {
+  DASHBOARD_PIPELINES,
+  DEFAULT_PIPELINE_KEY,
+  getPipelineMeta,
+  isTeamVisibleInPipeline,
+  resolveDashboardPipeline,
+  type DashboardPipelineKey,
+} from "@/lib/access-control";
 import {
   Select,
   SelectContent,
@@ -56,10 +64,21 @@ import {
   type Team,
 } from "@/lib/teams-data";
 
+const PIPELINE_STORAGE_KEY = "focus-dashboard-pipeline";
+
+function readStoredPipeline(): DashboardPipelineKey | null {
+  if (typeof window === "undefined") return null;
+  const stored = localStorage.getItem(PIPELINE_STORAGE_KEY);
+  if (stored === "comercial_geral" || stored === "economico") {
+    return stored;
+  }
+  return null;
+}
+
 export const Route = createFileRoute("/")({
   loader: async ({ context: { queryClient } }) => {
     try {
-      await queryClient.prefetchQuery(dashboardQueryOptions);
+      await queryClient.prefetchQuery(dashboardQueryOptions(DEFAULT_PIPELINE_KEY));
     } catch {
       // O dashboard usa placeholder local se o prefetch falhar no SSR.
     }
@@ -165,14 +184,58 @@ function Dashboard({
   isAdministrator: boolean;
   onOpenAccessManagement: () => void;
 }) {
-  const { canAccessTeam, allowedPages } = useAccess();
-  const placeholder = useMemo(() => createPlaceholderDashboard(), []);
-  const { data, isFetching, isError, error } = useQuery({
-    ...dashboardQueryOptions,
-    placeholderData: placeholder,
+  const { canAccessTeam, allowedPages, canSwitchPipeline, allowedPipeline, canAccessPipeline } =
+    useAccess();
+  const [pipelineKey, setPipelineKey] = useState<DashboardPipelineKey>(() => {
+    const stored = readStoredPipeline();
+    if (stored && (canSwitchPipeline || stored === allowedPipeline)) {
+      return stored;
+    }
+    return resolveDashboardPipeline(allowedPipeline);
   });
-  const dashboardData = data ?? placeholder;
-  const teams = dashboardData.teams ?? [];
+  const activePipeline: DashboardPipelineKey = canSwitchPipeline
+    ? pipelineKey
+    : resolveDashboardPipeline(allowedPipeline);
+
+  const placeholder = useMemo(
+    () => createPlaceholderDashboard(activePipeline),
+    [activePipeline],
+  );
+
+  useEffect(() => {
+    if (!canSwitchPipeline) {
+      setPipelineKey(resolveDashboardPipeline(allowedPipeline));
+    }
+  }, [allowedPipeline, canSwitchPipeline]);
+
+  useEffect(() => {
+    if (!canAccessPipeline(activePipeline)) {
+      setPipelineKey(resolveDashboardPipeline(allowedPipeline));
+    }
+  }, [activePipeline, allowedPipeline, canAccessPipeline]);
+
+  useEffect(() => {
+    if (!canSwitchPipeline) return;
+    localStorage.setItem(PIPELINE_STORAGE_KEY, pipelineKey);
+  }, [canSwitchPipeline, pipelineKey]);
+
+  const { data, isFetching, isError, error } = useQuery({
+    ...dashboardQueryOptions(activePipeline),
+    placeholderData: (previous) =>
+      previous?.pipeline === activePipeline ? previous : placeholder,
+  });
+
+  const dashboardData =
+    data?.pipeline === activePipeline ? data : placeholder;
+  const pipelineLabel =
+    dashboardData.pipelineLabel ?? getPipelineMeta(activePipeline).label;
+  const teams = useMemo(
+    () =>
+      (dashboardData.teams ?? []).filter((team) =>
+        isTeamVisibleInPipeline(team.id, activePipeline),
+      ),
+    [dashboardData.teams, activePipeline],
+  );
   const isInitialLoad =
     isFetching && dashboardData.source === "unavailable" && !dashboardData.error && !isError;
   const [teamId, setTeamId] = useState<string>("overview");
@@ -195,6 +258,13 @@ function Dashboard({
     setTeamId(id);
   }, []);
 
+  const handlePipelineChange = useCallback((pipeline: DashboardPipelineKey) => {
+    if (!canAccessPipeline(pipeline)) return;
+    setMotionTier("full");
+    setPipelineKey(pipeline);
+    setTeamId("overview");
+  }, [canAccessPipeline]);
+
   const trend = useMemo(() => monthlyTrend(teams), [teams]);
   const trendMax = Math.max(...trend.map((t) => t.value), 1);
   const peakMonth = useMemo(
@@ -204,8 +274,10 @@ function Dashboard({
 
   const accessibleTeamIds = useMemo(() => {
     const ids = ["overview", ...teams.map((team) => team.id)];
-    return ids.filter((id) => canAccessTeam(id));
-  }, [teams, canAccessTeam]);
+    return ids.filter(
+      (id) => isTeamVisibleInPipeline(id, activePipeline) && canAccessTeam(id),
+    );
+  }, [teams, canAccessTeam, activePipeline]);
 
   useEffect(() => {
     if (accessibleTeamIds.length === 0) return;
@@ -229,6 +301,8 @@ function Dashboard({
                   Dashboard Comercial
                 </h1>
                 <p className="dashboard-source mt-1 text-xs">
+                  Esteira: <span className="text-slate-200">{pipelineLabel}</span>
+                  {" · "}
                   Fonte:{" "}
                   {isInitialLoad ? (
                     <span className="text-slate-200">Carregando Bitrix…</span>
@@ -260,6 +334,12 @@ function Dashboard({
                 accessibleTeamIds={accessibleTeamIds}
               />
               <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
+                {canSwitchPipeline ? (
+                  <PipelineSwitcher
+                    pipeline={activePipeline}
+                    onChange={handlePipelineChange}
+                  />
+                ) : null}
                 <PeriodFilterButton
                   month={month}
                   onMonthChange={handleMonthChange}
@@ -335,6 +415,45 @@ function monthPresets(peakMonth: (typeof MONTHS)[number], year = 2026) {
     },
     { id: "peak" as const, label: "Pico", value: peakMonth },
   ];
+}
+
+function PipelineSwitcher({
+  pipeline,
+  onChange,
+}: {
+  pipeline: DashboardPipelineKey;
+  onChange: (pipeline: DashboardPipelineKey) => void;
+}) {
+  return (
+    <nav
+      aria-label="Alternar esteira"
+      className="inline-flex h-10 max-w-full items-center gap-1 rounded-lg border border-white/15 bg-white/10 p-1"
+    >
+      <span className="hidden items-center gap-1 px-2 text-xs font-semibold text-white/80 sm:inline-flex">
+        <Repeat2 className="h-3.5 w-3.5" aria-hidden />
+        Esteira
+      </span>
+      {DASHBOARD_PIPELINES.map((item) => {
+        const active = pipeline === item.key;
+        return (
+          <button
+            key={item.key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(item.key)}
+            className={cn(
+              "inline-flex h-8 items-center rounded-md px-3 text-xs font-semibold motion-safe:transition-colors",
+              active
+                ? "bg-white text-slate-900 shadow-sm"
+                : "text-white/85 hover:bg-white/10",
+            )}
+          >
+            {item.label}
+          </button>
+        );
+      })}
+    </nav>
+  );
 }
 
 function PeriodFilterButton({

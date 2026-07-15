@@ -287,6 +287,10 @@ export const TEAM_ACCENT: Record<string, string> = {
   elite: "from-violet-600 to-purple-400",
   lider: "from-emerald-500 to-teal-500",
   total: "from-amber-500 to-orange-500",
+  imparaveis: "from-sky-500 to-blue-500",
+  domina: "from-rose-500 to-pink-500",
+  legado: "from-indigo-500 to-violet-500",
+  lobos: "from-slate-500 to-zinc-500",
 };
 
 export function initials(name: string): string {

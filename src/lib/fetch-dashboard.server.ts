@@ -23,9 +23,20 @@ import {
 import {
   DASHBOARD_YEAR,
   createPlaceholderDashboard,
-  emptyRosterFromStatic,
+  emptyRosterForPipeline,
+  emptyRosterFromTargets,
   type DashboardPayload,
 } from "@/lib/dashboard-payload";
+import {
+  DEFAULT_PIPELINE_KEY,
+  buildEconomicoDepartmentTargets,
+  getPipelineCategoryId,
+  getPipelineDepartmentLabels,
+  getPipelineDepartments,
+  getPipelineMeta,
+  type DashboardPipelineKey,
+  type PipelineDepartmentTarget,
+} from "@/lib/access-control";
 import { isAttendanceStatusPhase, mapStageToPhase, type Phase } from "@/lib/phases";
 import {
   MONTHS,
@@ -37,8 +48,6 @@ import {
 } from "@/lib/teams-data";
 
 const YEAR = DASHBOARD_YEAR;
-const DEAL_CATEGORY_ID = 16;
-const DASHBOARD_CACHE_KEY = `dashboard:${YEAR}:category:${DEAL_CATEGORY_ID}`;
 const FRESH_CACHE_MS = 15 * 60 * 1_000;
 const STALE_CACHE_MS = 6 * 60 * 60 * 1_000;
 const CACHE_READ_TIMEOUT_MS = 4_000;
@@ -49,9 +58,26 @@ type DashboardCacheEntry = {
   payload: DashboardPayload;
 };
 
-let memoryCache: DashboardCacheEntry | undefined;
-let dashboardRequest: Promise<DashboardPayload> | undefined;
-let backgroundRefresh: Promise<void> | undefined;
+type PipelineRuntime = {
+  memoryCache?: DashboardCacheEntry;
+  dashboardRequest?: Promise<DashboardPayload>;
+  backgroundRefresh?: Promise<void>;
+};
+
+const pipelineRuntime = new Map<DashboardPipelineKey, PipelineRuntime>();
+
+function getPipelineRuntime(pipeline: DashboardPipelineKey): PipelineRuntime {
+  const current = pipelineRuntime.get(pipeline);
+  if (current) return current;
+  const next: PipelineRuntime = {};
+  pipelineRuntime.set(pipeline, next);
+  return next;
+}
+
+function dashboardCacheKey(pipeline: DashboardPipelineKey): string {
+  const categoryId = getPipelineCategoryId(pipeline);
+  return `dashboard:${YEAR}:category:${categoryId}`;
+}
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -66,12 +92,6 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T
     if (timeout) clearTimeout(timeout);
   }
 }
-
-const TARGET_DEPARTMENTS = [
-  { teamId: "elite", departmentName: "Focus Elite" },
-  { teamId: "lider", departmentName: "Focus Líder" },
-  { teamId: "total", departmentName: "Focus Total" },
-] as const;
 
 function normalizeName(value: string): string {
   return normalizeMemberName(value);
@@ -92,30 +112,49 @@ function userDepartmentIds(user: BitrixUser): string[] {
   return (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
 }
 
-/** Mapeia os três departamentos Focus e todos os seus descendentes para as abas do painel. */
-function departmentTeamMap(departments: BitrixDepartment[]): Map<string, string> {
-  const byId = new Map(departments.map((d) => [String(d.ID), d]));
+function resolveDepartmentTargets(
+  departments: BitrixDepartment[],
+  pipeline: DashboardPipelineKey,
+  targetsOverride?: PipelineDepartmentTarget[],
+): Map<string, string> {
+  const targets = targetsOverride ?? getPipelineDepartments(pipeline);
+  const byId = new Map(departments.map((department) => [String(department.ID), department]));
   const direct = new Map<string, string>();
 
-  for (const target of TARGET_DEPARTMENTS) {
-    const normalizedTarget = normalizeName(target.departmentName);
-    for (const department of departments) {
-      if (normalizeName(department.NAME) === normalizedTarget) {
-        direct.set(String(department.ID), target.teamId);
+  for (const target of targets) {
+    if (target.departmentId != null) {
+      const departmentId = String(target.departmentId);
+      if (byId.has(departmentId)) {
+        direct.set(departmentId, target.teamId);
+      }
+    }
+
+    if (target.departmentName) {
+      const normalizedTarget = normalizeName(target.departmentName);
+      for (const department of departments) {
+        if (normalizeName(department.NAME) === normalizedTarget) {
+          direct.set(String(department.ID), target.teamId);
+        }
       }
     }
   }
 
-  const missing = TARGET_DEPARTMENTS.filter(
-    (target) =>
-      !departments.some(
-        (department) => normalizeName(department.NAME) === normalizeName(target.departmentName),
-      ),
-  );
+  const missing = targets.filter((target) => {
+    if (target.departmentId != null && direct.has(String(target.departmentId))) {
+      return false;
+    }
+    if (target.departmentName) {
+      return !departments.some(
+        (department) => normalizeName(department.NAME) === normalizeName(target.departmentName!),
+      );
+    }
+    return target.departmentId == null || !byId.has(String(target.departmentId));
+  });
+
   if (missing.length) {
     throw new Error(
-      `Departamento(s) não encontrado(s) no Bitrix: ${missing
-        .map((target) => target.departmentName)
+      `Departamento(s) não encontrado(s) no Bitrix (${getPipelineMeta(pipeline).label}): ${missing
+        .map((target) => target.departmentName ?? `ID ${target.departmentId}`)
         .join(", ")}`,
     );
   }
@@ -138,7 +177,39 @@ function departmentTeamMap(departments: BitrixDepartment[]): Map<string, string>
     const teamId = resolveTeam(departmentId);
     if (teamId) resolved.set(departmentId, teamId);
   }
+
   return resolved;
+}
+
+function assignTeamLeaders(
+  teams: Team[],
+  users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+): void {
+  for (const team of teams) {
+    const leaderName = TEAM_LEADER_NAMES[team.id];
+    if (leaderName) {
+      const leader = [...users.values()].find(
+        (candidate) =>
+          candidate.teamId === team.id && normalizeName(candidate.name) === normalizeName(leaderName),
+      );
+      if (!leader) continue;
+      team.leader = {
+        bitrixId: leader.id,
+        name: leader.name,
+        photoUrl: leader.photoUrl,
+      };
+      continue;
+    }
+
+    const teamUsers = [...users.values()].filter((candidate) => candidate.teamId === team.id);
+    if (teamUsers.length === 0) continue;
+    const leader = teamUsers[0];
+    team.leader = {
+      bitrixId: leader.id,
+      name: leader.name,
+      photoUrl: leader.photoUrl,
+    };
+  }
 }
 
 function statusMap(statuses: BitrixStatus[], categoryId?: number): Map<string, BitrixStatus> {
@@ -285,17 +356,22 @@ function ingestItems(
   return ingested;
 }
 
-async function loadFromBitrix(): Promise<DashboardPayload> {
+async function loadFromBitrix(pipeline: DashboardPipelineKey): Promise<DashboardPayload> {
+  const pipelineMeta = getPipelineMeta(pipeline);
+  const dealCategoryId = pipelineMeta.bitrixCategoryId;
   const base = getWebhookBase()!;
-  const teams = emptyRosterFromStatic();
 
   // Departamentos, usuários e etapas são independentes; o rate limiter do Bitrix serializa as chamadas.
   const [departments, bitrixUsers, dealStages] = await Promise.all([
     fetchDepartments(),
     fetchUsers(),
-    fetchDealStages(DEAL_CATEGORY_ID),
+    fetchDealStages(dealCategoryId),
   ]);
-  const departmentTeams = departmentTeamMap(departments);
+
+  const departmentTargets =
+    pipeline === "economico" ? buildEconomicoDepartmentTargets(departments) : getPipelineDepartments(pipeline);
+  const teams = emptyRosterFromTargets(departmentTargets, pipeline);
+  const departmentTeams = resolveDepartmentTargets(departments, pipeline, departmentTargets);
   const users = new Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>();
 
   for (const u of bitrixUsers) {
@@ -312,23 +388,11 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
     });
   }
 
-  for (const team of teams) {
-    const leaderName = TEAM_LEADER_NAMES[team.id];
-    const leader = [...users.values()].find(
-      (candidate) =>
-        candidate.teamId === team.id && normalizeName(candidate.name) === normalizeName(leaderName),
-    );
-    if (!leader) continue;
-    team.leader = {
-      bitrixId: leader.id,
-      name: leader.name,
-      photoUrl: leader.photoUrl,
-    };
-  }
+  assignTeamLeaders(teams, users);
 
   if (users.size === 0) {
     throw new Error(
-      "Nenhum usuário dos departamentos Focus Elite, Focus Líder e Focus Total foi retornado pelo webhook",
+      `Nenhum usuário dos departamentos ${getPipelineDepartmentLabels(pipeline)} foi retornado pelo webhook`,
     );
   }
 
@@ -336,14 +400,16 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
   applyActiveRosterFromBitrix(teams, users);
 
   if (dealStages.length === 0) {
-    throw new Error("Nenhuma etapa foi encontrada para o pipeline Comercial Geral (categoria 16)");
+    throw new Error(
+      `Nenhuma etapa foi encontrada para o pipeline ${pipelineMeta.label} (categoria ${dealCategoryId})`,
+    );
   }
 
   const [deals, attendanceStatusById] = await Promise.all([
-    fetchDealsInYear(YEAR, DEAL_CATEGORY_ID, [...users.keys()]),
+    fetchDealsInYear(YEAR, dealCategoryId, [...users.keys()]),
     resolveAttendanceStatusPhaseMap(),
   ]);
-  const stages = statusMap(dealStages, DEAL_CATEGORY_ID);
+  const stages = statusMap(dealStages, dealCategoryId);
 
   // Preenche IDs/fotos somente no roster do departamento real do usuário.
   for (const user of users.values()) {
@@ -366,7 +432,14 @@ async function loadFromBitrix(): Promise<DashboardPayload> {
     );
   }
 
-  return { source: "bitrix", year: YEAR, teams, dealCount: deals.length };
+  return {
+    source: "bitrix",
+    year: YEAR,
+    teams,
+    pipeline,
+    pipelineLabel: pipelineMeta.label,
+    dealCount: deals.length,
+  };
 }
 
 function validCacheEntry(value: unknown): value is DashboardCacheEntry {
@@ -380,18 +453,21 @@ function validCacheEntry(value: unknown): value is DashboardCacheEntry {
   );
 }
 
-async function readDashboardCache(): Promise<DashboardCacheEntry | undefined> {
-  if (memoryCache && Date.now() - memoryCache.cachedAt <= STALE_CACHE_MS) {
-    return memoryCache;
+async function readDashboardCache(pipeline: DashboardPipelineKey): Promise<DashboardCacheEntry | undefined> {
+  const runtime = getPipelineRuntime(pipeline);
+  if (runtime.memoryCache && Date.now() - runtime.memoryCache.cachedAt <= STALE_CACHE_MS) {
+    return runtime.memoryCache;
   }
+
+  const cacheKey = dashboardCacheKey(pipeline);
 
   try {
     const value = await withTimeout(
-      getCache({ namespace: "sales-compass" }).get(DASHBOARD_CACHE_KEY),
+      getCache({ namespace: "sales-compass" }).get(cacheKey),
       CACHE_READ_TIMEOUT_MS,
     );
     if (validCacheEntry(value) && Date.now() - value.cachedAt <= STALE_CACHE_MS) {
-      memoryCache = value;
+      runtime.memoryCache = value;
       return value;
     }
   } catch {
@@ -400,16 +476,21 @@ async function readDashboardCache(): Promise<DashboardCacheEntry | undefined> {
   return undefined;
 }
 
-async function writeDashboardCache(payload: DashboardPayload): Promise<void> {
+async function writeDashboardCache(
+  pipeline: DashboardPipelineKey,
+  payload: DashboardPayload,
+): Promise<void> {
+  const runtime = getPipelineRuntime(pipeline);
   const entry: DashboardCacheEntry = { cachedAt: Date.now(), payload };
-  memoryCache = entry;
+  runtime.memoryCache = entry;
+  const cacheKey = dashboardCacheKey(pipeline);
 
   try {
     await withTimeout(
-      getCache({ namespace: "sales-compass" }).set(DASHBOARD_CACHE_KEY, entry, {
+      getCache({ namespace: "sales-compass" }).set(cacheKey, entry, {
         ttl: STALE_CACHE_MS / 1_000,
-        tags: ["dashboard-focus", `dashboard-focus-${YEAR}`],
-        name: "dashboard-focus-bitrix",
+        tags: ["dashboard-focus", `dashboard-focus-${YEAR}`, `dashboard-focus-${pipeline}`],
+        name: `dashboard-focus-bitrix-${pipeline}`,
       }),
       CACHE_WRITE_TIMEOUT_MS,
     );
@@ -418,88 +499,100 @@ async function writeDashboardCache(payload: DashboardPayload): Promise<void> {
   }
 }
 
-async function loadAndCacheDashboard(): Promise<DashboardPayload> {
-  if (!dashboardRequest) {
-    dashboardRequest = loadFromBitrix();
+async function loadAndCacheDashboard(pipeline: DashboardPipelineKey): Promise<DashboardPayload> {
+  const runtime = getPipelineRuntime(pipeline);
+  if (!runtime.dashboardRequest) {
+    runtime.dashboardRequest = loadFromBitrix(pipeline);
   }
 
   try {
-    const payload = await dashboardRequest;
-    await writeDashboardCache(payload);
+    const payload = await runtime.dashboardRequest;
+    await writeDashboardCache(pipeline, payload);
     return payload;
   } finally {
-    dashboardRequest = undefined;
+    runtime.dashboardRequest = undefined;
   }
 }
 
-function scheduleBackgroundRefresh(): void {
-  if (backgroundRefresh || dashboardRequest) return;
+function scheduleBackgroundRefresh(pipeline: DashboardPipelineKey): void {
+  const runtime = getPipelineRuntime(pipeline);
+  if (runtime.backgroundRefresh || runtime.dashboardRequest) return;
 
-  backgroundRefresh = loadAndCacheDashboard()
+  runtime.backgroundRefresh = loadAndCacheDashboard(pipeline)
     .then(() => undefined)
     .catch((error) => {
-      console.warn("[dashboard] atualização em segundo plano falhou:", error);
+      console.warn(`[dashboard:${pipeline}] atualização em segundo plano falhou:`, error);
     })
     .finally(() => {
-      backgroundRefresh = undefined;
+      runtime.backgroundRefresh = undefined;
     });
 
   try {
-    waitUntil(backgroundRefresh);
+    waitUntil(runtime.backgroundRefresh);
   } catch {
-    void backgroundRefresh;
+    void runtime.backgroundRefresh;
   }
 }
 
-function unavailablePayload(error: string): DashboardPayload {
+function unavailablePayload(pipeline: DashboardPipelineKey, error: string): DashboardPayload {
+  const pipelineMeta = getPipelineMeta(pipeline);
   return {
     source: "unavailable",
     year: YEAR,
-    teams: emptyRosterFromStatic(),
+    teams: emptyRosterForPipeline(pipeline),
+    pipeline,
+    pipelineLabel: pipelineMeta.label,
     error,
   };
 }
 
-export async function getDashboardDataImpl(): Promise<DashboardPayload> {
+export async function getDashboardDataImpl(
+  pipeline: DashboardPipelineKey = DEFAULT_PIPELINE_KEY,
+): Promise<DashboardPayload> {
   resolveBitrixWebhookUrl();
 
   if (!hasBitrixWebhook()) {
-    return unavailablePayload("BITRIX_WEBHOOK_URL não configurada");
+    return unavailablePayload(pipeline, "BITRIX_WEBHOOK_URL não configurada");
   }
 
-  const cached = await readDashboardCache();
+  const runtime = getPipelineRuntime(pipeline);
+  const cached = await readDashboardCache(pipeline);
   if (cached && Date.now() - cached.cachedAt <= FRESH_CACHE_MS) {
     return cached.payload;
   }
 
   if (cached) {
-    scheduleBackgroundRefresh();
+    scheduleBackgroundRefresh(pipeline);
     return cached.payload;
   }
 
-  if (dashboardRequest) {
-    // Não bloqueia visitas nem o screenshot da Vercel enquanto o Bitrix carrega em segundo plano.
-    return createPlaceholderDashboard();
+  if (runtime.dashboardRequest) {
+    try {
+      return await runtime.dashboardRequest;
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
+      return unavailablePayload(pipeline, reason);
+    }
   }
 
-  scheduleBackgroundRefresh();
-  return createPlaceholderDashboard();
+  scheduleBackgroundRefresh(pipeline);
+  return createPlaceholderDashboard(pipeline);
 }
 
-export async function warmDashboardCacheHandler(): Promise<
-  { ok: true } | { ok: false; reason: string }
-> {
+export async function warmDashboardCacheHandler(
+  pipeline: DashboardPipelineKey = DEFAULT_PIPELINE_KEY,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
   resolveBitrixWebhookUrl();
   if (!hasBitrixWebhook()) {
     return { ok: false, reason: "BITRIX_WEBHOOK_URL não configurada" };
   }
 
   try {
-    await loadAndCacheDashboard();
+    await loadAndCacheDashboard(pipeline);
     return { ok: true };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
-    console.warn("[dashboard] warm cache falhou:", reason);
+    console.warn(`[dashboard:${pipeline}] warm cache falhou:`, reason);
     return { ok: false, reason };
   }
 }
