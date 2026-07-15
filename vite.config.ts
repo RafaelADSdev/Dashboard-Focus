@@ -1,8 +1,25 @@
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 import { loadEnv, type ConfigEnv } from "vite";
 
+const SERVER_ENV_KEYS = [
+  "BITRIX_WEBHOOK_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+  "VITE_SUPABASE_URL",
+  "VITE_SUPABASE_ANON_KEY",
+  "VITE_ADMIN_EMAILS",
+] as const;
+
+function applyServerEnv(env: Record<string, string>) {
+  for (const key of SERVER_ENV_KEYS) {
+    const value = env[key]?.trim();
+    if (value) {
+      process.env[key] = value;
+    }
+  }
+}
+
 const nitroConfig = {
-  env: ["BITRIX_WEBHOOK_URL"],
+  env: [...SERVER_ENV_KEYS],
   cloudflare: {
     deployConfig: true,
     nodeCompat: true,
@@ -20,9 +37,7 @@ const lovableConfig = defineConfig({
 
 export default (configEnv: ConfigEnv) => {
   const env = loadEnv(configEnv.mode, process.cwd(), "");
-  if (env.BITRIX_WEBHOOK_URL) {
-    process.env.BITRIX_WEBHOOK_URL = env.BITRIX_WEBHOOK_URL;
-  }
+  applyServerEnv(env);
 
   return lovableConfig(configEnv);
 };

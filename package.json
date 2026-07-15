@@ -12,6 +12,8 @@
     "format": "prettier --write .",
     "vercel:pull": "npx vercel pull --yes",
     "vercel:env:pull": "npx vercel env pull .env.local --yes",
+    "supabase:service-role": "node scripts/configure-supabase-service-role.mjs",
+    "vercel:supabase:sync": "node scripts/sync-vercel-supabase-env.mjs",
     "vercel:deploy": "npx vercel",
     "vercel:prod": "npx vercel --prod"
   },

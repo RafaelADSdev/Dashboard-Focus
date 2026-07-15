@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, LogOut } from "lucide-react";
+import { Filter, LogOut, Shield } from "lucide-react";
 import {
   createContext,
   Fragment,
@@ -13,7 +13,13 @@ import {
 } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { LoginScreen } from "@/components/login-screen";
+import {
+  AccessManagementScreen,
+  AccessPendingScreen,
+  AccessSetupRequiredScreen,
+} from "@/components/access-management-screen";
 import { useAuth } from "@/lib/auth";
+import { AccessProvider, useAccess } from "@/lib/access";
 import {
   Select,
   SelectContent,
@@ -51,8 +57,12 @@ import {
 } from "@/lib/teams-data";
 
 export const Route = createFileRoute("/")({
-  loader: ({ context: { queryClient } }) => {
-    void queryClient.prefetchQuery(dashboardQueryOptions);
+  loader: async ({ context: { queryClient } }) => {
+    try {
+      await queryClient.prefetchQuery(dashboardQueryOptions);
+    } catch {
+      // O dashboard usa placeholder local se o prefetch falhar no SSR.
+    }
   },
   head: () => ({
     meta: [
@@ -93,16 +103,69 @@ function DashboardApp() {
     return <LoginScreen configured={configured} onSignIn={signIn} />;
   }
 
-  return <Dashboard userEmail={session.user.email} onSignOut={signOut} />;
+  return (
+    <AccessProvider
+      userId={session.user.id}
+      userEmail={session.user.email}
+      accessToken={session.access_token}
+    >
+      <AuthenticatedApp userEmail={session.user.email} onSignOut={signOut} />
+    </AccessProvider>
+  );
 }
 
-function Dashboard({
+function AuthenticatedApp({
   userEmail,
   onSignOut,
 }: {
   userEmail?: string | null;
   onSignOut: () => Promise<void>;
 }) {
+  const { loading, ready, setupRequired, profile, isAdministrator } = useAccess();
+  const [appView, setAppView] = useState<"dashboard" | "access">("dashboard");
+
+  if (loading || !ready) {
+    return (
+      <main className="login-shell flex min-h-screen items-center justify-center">
+        <p className="text-sm text-white/70">Carregando permissões…</p>
+      </main>
+    );
+  }
+
+  if (setupRequired) {
+    return <AccessSetupRequiredScreen />;
+  }
+
+  if (!profile) {
+    return <AccessPendingScreen email={userEmail} />;
+  }
+
+  if (appView === "access" && isAdministrator) {
+    return <AccessManagementScreen onBack={() => setAppView("dashboard")} />;
+  }
+
+  return (
+    <Dashboard
+      userEmail={userEmail}
+      onSignOut={onSignOut}
+      isAdministrator={isAdministrator}
+      onOpenAccessManagement={() => setAppView("access")}
+    />
+  );
+}
+
+function Dashboard({
+  userEmail,
+  onSignOut,
+  isAdministrator,
+  onOpenAccessManagement,
+}: {
+  userEmail?: string | null;
+  onSignOut: () => Promise<void>;
+  isAdministrator: boolean;
+  onOpenAccessManagement: () => void;
+}) {
+  const { canAccessTeam, allowedPages } = useAccess();
   const placeholder = useMemo(() => createPlaceholderDashboard(), []);
   const { data, isFetching, isError, error } = useQuery({
     ...dashboardQueryOptions,
@@ -139,6 +202,22 @@ function Dashboard({
     [trend],
   );
 
+  const accessibleTeamIds = useMemo(() => {
+    const ids = ["overview", ...teams.map((team) => team.id)];
+    return ids.filter((id) => canAccessTeam(id));
+  }, [teams, canAccessTeam]);
+
+  useEffect(() => {
+    if (accessibleTeamIds.length === 0) return;
+    if (!canAccessTeam(teamId)) {
+      setTeamId(accessibleTeamIds[0]);
+    }
+  }, [teamId, canAccessTeam, accessibleTeamIds]);
+
+  if (allowedPages.length === 0) {
+    return <AccessPendingScreen email={userEmail} />;
+  }
+
   return (
     <div className="dash-shell">
       <div className="flex h-full flex-col">
@@ -174,13 +253,29 @@ function Dashboard({
             </header>
 
             <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-2">
-              <TeamTabNav teamId={teamId} teams={teams} onChange={handleTeamChange} />
+              <TeamTabNav
+                teamId={teamId}
+                teams={teams}
+                onChange={handleTeamChange}
+                accessibleTeamIds={accessibleTeamIds}
+              />
               <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
                 <PeriodFilterButton
                   month={month}
                   onMonthChange={handleMonthChange}
                   peakMonth={peakMonth}
                 />
+                {isAdministrator ? (
+                  <button
+                    type="button"
+                    onClick={onOpenAccessManagement}
+                    className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
+                    aria-label="Gestão de acesso"
+                  >
+                    <Shield className="h-4 w-4 shrink-0" aria-hidden />
+                    Acessos
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={() => void onSignOut()}
@@ -297,20 +392,23 @@ function TeamTabNav({
   teamId,
   teams,
   onChange,
+  accessibleTeamIds,
 }: {
   teamId: string;
   teams: Team[];
   onChange: (id: string) => void;
+  accessibleTeamIds: string[];
 }) {
   const tabs = useMemo(
-    () => [
-      { id: "overview", label: "Visão Geral" },
-      ...teams.map((t) => ({
-        id: t.id,
-        label: t.name,
-      })),
-    ],
-    [teams],
+    () =>
+      [
+        { id: "overview", label: "Visão Geral" },
+        ...teams.map((t) => ({
+          id: t.id,
+          label: t.name,
+        })),
+      ].filter((tab) => accessibleTeamIds.includes(tab.id)),
+    [teams, accessibleTeamIds],
   );
 
   return (
@@ -369,7 +467,7 @@ function AnimatedDashboardContent({
           <TeamView team={selectedTeam} month={month} />
         ) : (
           <div className="flex h-full items-center justify-center rounded-2xl border border-slate-200 bg-white/80 p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400">
-            Equipe não encontrada. Volte para Visão Geral.
+            Você não tem permissão para ver esta equipe.
           </div>
         )}
       </div>

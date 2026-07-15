@@ -653,6 +653,24 @@
     );
   }
 
+  .access-screen-shell {
+    @apply min-h-screen w-full overflow-y-auto text-slate-900;
+    background: #eef0f4;
+  }
+
+  .dark .access-screen-shell {
+    color: #f1f5f9;
+    background:
+      radial-gradient(circle at 12% 8%, rgb(124 58 237 / 0.16), transparent 30%),
+      radial-gradient(circle at 88% 90%, rgb(147 51 234 / 0.1), transparent 34%),
+      linear-gradient(
+        to bottom right,
+        var(--dash-bg-from),
+        var(--dash-bg-via),
+        var(--dash-bg-to)
+      );
+  }
+
   .dash-navbar {
     color: #fff;
     background: var(--navbar-background);
