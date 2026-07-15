@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { CalendarDays } from "lucide-react";
+import { Filter, LogOut } from "lucide-react";
 import {
   createContext,
   Fragment,
@@ -12,10 +12,15 @@ import {
   useState,
 } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { LoginScreen } from "@/components/login-screen";
+import { useAuth } from "@/lib/auth";
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
@@ -58,7 +63,7 @@ export const Route = createFileRoute("/")({
       },
     ],
   }),
-  component: Dashboard,
+  component: DashboardApp,
 });
 
 const fmt = (n: number) => n.toLocaleString("pt-BR");
@@ -73,7 +78,31 @@ function useMotionTier() {
 
 const LABEL_CHROME = "dash-label-chrome";
 
-function Dashboard() {
+function DashboardApp() {
+  const { session, loading, configured, signIn, signOut } = useAuth();
+
+  if (loading) {
+    return (
+      <main className="login-shell flex min-h-screen items-center justify-center">
+        <p className="text-sm text-white/70">Carregando sessão…</p>
+      </main>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen configured={configured} onSignIn={signIn} />;
+  }
+
+  return <Dashboard userEmail={session.user.email} onSignOut={signOut} />;
+}
+
+function Dashboard({
+  userEmail,
+  onSignOut,
+}: {
+  userEmail?: string | null;
+  onSignOut: () => Promise<void>;
+}) {
   const placeholder = useMemo(() => createPlaceholderDashboard(), []);
   const { data, isFetching, isError, error } = useQuery({
     ...dashboardQueryOptions,
@@ -115,13 +144,10 @@ function Dashboard() {
       <div className="flex h-full flex-col">
         <div className="dash-navbar w-full shrink-0">
           <div className="mx-auto w-full max-w-[1600px] px-4 pb-2 pt-3 md:px-6">
-            <header className="flex flex-wrap items-center justify-between gap-4 pb-2">
+            <header className="pb-2">
               <div>
-                <p className={cn(LABEL_CHROME, "tracking-[0.2em]")}>
-                  Reunião · Panorama Comercial 2026
-                </p>
-                <h1 className="mt-1 text-2xl font-bold tracking-tight text-wrap-balance">
-                  Dashboard das Equipes Focus
+                <h1 className="text-2xl font-bold tracking-tight text-wrap-balance">
+                  Dashboard Comercial
                 </h1>
                 <p className="dashboard-source mt-1 text-xs">
                   Fonte:{" "}
@@ -145,17 +171,28 @@ function Dashboard() {
                   ) : null}
                 </p>
               </div>
+            </header>
 
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-2">
+              <TeamTabNav teamId={teamId} teams={teams} onChange={handleTeamChange} />
               <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-                <PeriodControls
+                <PeriodFilterButton
                   month={month}
                   onMonthChange={handleMonthChange}
                   peakMonth={peakMonth}
                 />
+                <button
+                  type="button"
+                  onClick={() => void onSignOut()}
+                  className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
+                  aria-label={userEmail ? `Sair da conta ${userEmail}` : "Sair"}
+                  title={userEmail ?? undefined}
+                >
+                  <LogOut className="h-4 w-4 shrink-0" aria-hidden />
+                  Sair
+                </button>
               </div>
-            </header>
-
-            <TeamTabNav teamId={teamId} teams={teams} onChange={handleTeamChange} />
+            </div>
           </div>
         </div>
 
@@ -205,7 +242,7 @@ function monthPresets(peakMonth: (typeof MONTHS)[number], year = 2026) {
   ];
 }
 
-function PeriodControls({
+function PeriodFilterButton({
   month,
   onMonthChange,
   peakMonth,
@@ -218,72 +255,39 @@ function PeriodControls({
 }) {
   const monthLabel = month === "all" ? "Ano todo" : MONTH_LABELS[month];
   const presets = monthPresets(peakMonth, year);
+  const currentMonth = presets[1].value;
 
-  const activePreset =
-    month === "all"
-      ? "all"
-      : month === presets[1].value
-        ? "current"
-        : month === peakMonth
-          ? "peak"
-          : null;
-
-  return (
-    <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-      <span className="dash-chip" aria-live="polite">
-        {year} · {monthLabel}
-      </span>
-
-      <div className="flex flex-wrap gap-1.5" role="group" aria-label="Atalhos de período">
-        {presets.map((preset) => (
-          <button
-            key={preset.id}
-            type="button"
-            onClick={() => onMonthChange(preset.value)}
-            className={cn(
-              "h-10 rounded-lg px-3 text-sm font-semibold",
-              activePreset === preset.id ? "dash-btn-active" : "dash-btn-ghost",
-            )}
-          >
-            {preset.label}
-          </button>
-        ))}
-      </div>
-
-      <DashboardFilter
-        month={month}
-        onMonthChange={onMonthChange}
-      />
-    </div>
-  );
-}
-
-function DashboardFilter({
-  month,
-  onMonthChange,
-}: {
-  month: MonthFilter;
-  onMonthChange: (m: MonthFilter) => void;
-}) {
   return (
     <Select value={month} onValueChange={(value) => onMonthChange(value as MonthFilter)}>
       <SelectTrigger
-        className="dash-filter-trigger h-10 w-auto min-w-40 gap-2 border-white! bg-white! text-slate-900! shadow-none hover:bg-slate-100!"
-        aria-label="Selecionar mês específico"
+        className="dash-filter-trigger h-10 w-auto min-w-36 gap-2 border-white! bg-white! text-slate-900! shadow-none hover:bg-slate-100!"
+        aria-label="Filtrar período"
       >
-        <CalendarDays className="h-4 w-4 shrink-0 text-slate-700" aria-hidden />
-        <span>{month === "all" ? "Mês específico" : `Mês · ${MONTH_LABELS[month]}`}</span>
+        <Filter className="h-4 w-4 shrink-0 text-slate-700" aria-hidden />
+        <span className="truncate">
+          Filtro · {year} · {monthLabel}
+        </span>
       </SelectTrigger>
       <SelectContent
         position="popper"
         align="end"
-        className="border-slate-200 bg-white text-slate-900 shadow-sm"
+        className="max-h-80 border-slate-200 bg-white text-slate-900 shadow-sm"
       >
-        {MONTHS.map((monthKey) => (
-          <SelectItem key={monthKey} value={monthKey}>
-            {MONTH_LABELS[monthKey]}
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          <SelectLabel>Atalhos</SelectLabel>
+          <SelectItem value="all">Ano todo</SelectItem>
+          <SelectItem value={currentMonth}>Mês atual</SelectItem>
+          <SelectItem value={peakMonth}>Pico · {MONTH_LABELS[peakMonth]}</SelectItem>
+        </SelectGroup>
+        <SelectSeparator />
+        <SelectGroup>
+          <SelectLabel>Mês de {year}</SelectLabel>
+          {MONTHS.map((monthKey) => (
+            <SelectItem key={monthKey} value={monthKey}>
+              {MONTH_LABELS[monthKey]}
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   );
@@ -310,7 +314,7 @@ function TeamTabNav({
   );
 
   return (
-    <nav aria-label="Equipes" className="pb-1">
+    <nav aria-label="Equipes" className="min-w-0">
       <div role="tablist" className="inline-flex max-w-full flex-wrap gap-1.5">
         {tabs.map((tab) => {
           const active = teamId === tab.id;
