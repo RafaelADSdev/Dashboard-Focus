@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { Filter, LogOut, Repeat2, Shield } from "lucide-react";
+import { LogOut, Repeat2, Shield } from "lucide-react";
 import {
   createContext,
   Fragment,
@@ -10,6 +10,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type ReactNode,
 } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { LoginScreen } from "@/components/login-screen";
@@ -18,25 +19,25 @@ import {
   AccessPendingScreen,
   AccessSetupRequiredScreen,
 } from "@/components/access-management-screen";
+import {
+  DashboardFilterSheet,
+  DashboardFilterTrigger,
+  type DashboardFilters,
+  type DiretoriaFilter,
+} from "@/components/dashboard-filter-sheet";
 import { useAuth } from "@/lib/auth";
 import { AccessProvider, useAccess } from "@/lib/access";
 import {
   DASHBOARD_PIPELINES,
   DEFAULT_PIPELINE_KEY,
-  getPipelineMeta,
+  filterTeamsByDiretoria,
+  isPrimeiraChaveTeamId,
+  isFocusMainTeamId,
+  focusMainTeamTabLabel,
   isTeamVisibleInPipeline,
   resolveDashboardPipeline,
   type DashboardPipelineKey,
 } from "@/lib/access-control";
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectLabel,
-  SelectSeparator,
-  SelectTrigger,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   createPlaceholderDashboard,
@@ -53,6 +54,8 @@ import {
   PHASE_COLORS,
   PHASE_SHORT_LABELS,
   TEAM_ACCENT,
+  TEAM_ACCENT_SOFT,
+  TEAM_HERO_GLASS,
   initials,
   memberActiveTotal,
   memberPhaseValue,
@@ -227,8 +230,6 @@ function Dashboard({
 
   const dashboardData =
     data?.pipeline === activePipeline ? data : placeholder;
-  const pipelineLabel =
-    dashboardData.pipelineLabel ?? getPipelineMeta(activePipeline).label;
   const teams = useMemo(
     () =>
       (dashboardData.teams ?? []).filter((team) =>
@@ -240,7 +241,9 @@ function Dashboard({
     isFetching && dashboardData.source === "unavailable" && !dashboardData.error && !isError;
   const [teamId, setTeamId] = useState<string>("overview");
   const [month, setMonth] = useState<MonthFilter>("all");
+  const [diretoria, setDiretoria] = useState<DiretoriaFilter>("all");
   const [motionTier, setMotionTier] = useState<MotionTier>("full");
+  const [filtersOpen, setFiltersOpen] = useState(false);
 
   useEffect(() => {
     if (teamId !== "overview" && !teams.some((t) => t.id === teamId)) {
@@ -265,7 +268,42 @@ function Dashboard({
     setTeamId("overview");
   }, [canAccessPipeline]);
 
-  const trend = useMemo(() => monthlyTrend(teams), [teams]);
+  const handleFiltersApply = useCallback(
+    (filters: DashboardFilters) => {
+      if (filters.pipeline !== activePipeline) {
+        if (!canAccessPipeline(filters.pipeline)) return;
+        setMotionTier("full");
+        setPipelineKey(filters.pipeline);
+      } else {
+        setMotionTier(filters.teamId === "overview" ? "full" : "instant");
+      }
+      setMonth(filters.month);
+      setTeamId(filters.teamId);
+      setDiretoria(filters.diretoria);
+    },
+    [activePipeline, canAccessPipeline],
+  );
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (month !== "all") count += 1;
+    if (teamId !== "overview") count += 1;
+    if (diretoria !== "all") count += 1;
+    return count;
+  }, [month, teamId, diretoria]);
+
+  const trendTeams = useMemo(() => {
+    if (teamId !== "overview") {
+      const selected = teams.find((team) => team.id === teamId);
+      return selected ? [selected] : teams;
+    }
+    if (activePipeline === "economico") {
+      return filterTeamsByDiretoria(teams, diretoria);
+    }
+    return teams;
+  }, [teams, teamId, activePipeline, diretoria]);
+
+  const trend = useMemo(() => monthlyTrend(trendTeams), [trendTeams]);
   const trendMax = Math.max(...trend.map((t) => t.value), 1);
   const peakMonth = useMemo(
     () => trend.reduce((a, b) => (b.value > a.value ? b : a)).month,
@@ -292,105 +330,183 @@ function Dashboard({
 
   return (
     <div className="dash-shell">
-      <div className="flex h-full flex-col">
-        <div className="dash-navbar w-full shrink-0">
-          <div className="mx-auto w-full max-w-[1600px] px-4 pb-2 pt-3 md:px-6">
-            <header className="pb-2">
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight text-wrap-balance">
+      <div className="dash-navbar w-full shrink-0">
+          <div className="dash-layout-wrap py-2">
+            <header className="flex flex-col gap-2">
+              <div className="min-w-0">
+                <h1 className="text-xl font-bold tracking-tight text-wrap-balance sm:text-2xl">
                   Dashboard Comercial
                 </h1>
-                <p className="dashboard-source mt-1 text-xs">
-                  Esteira: <span className="text-slate-200">{pipelineLabel}</span>
-                  {" · "}
-                  Fonte:{" "}
-                  {isInitialLoad ? (
-                    <span className="text-slate-200">Carregando Bitrix…</span>
-                  ) : dashboardData.source === "bitrix" ? (
-                    <span className="text-emerald-200">Bitrix (webhook)</span>
-                  ) : (
-                    <span className="text-amber-200">dados locais</span>
-                  )}
-                  {isFetching && !isInitialLoad ? (
-                    <span className="text-slate-300"> · atualizando</span>
-                  ) : null}
-                  {dashboardData.error ? (
-                    <span className="text-red-200"> · {dashboardData.error}</span>
-                  ) : isError ? (
-                    <span className="text-red-200">
-                      {" "}
-                      · {error instanceof Error ? error.message : "Falha ao carregar dados"}
-                    </span>
-                  ) : null}
+                <p className="dashboard-source mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                  <PipelineBadge pipeline={activePipeline} />
+                  <span className="hidden sm:inline" aria-hidden>
+                    ·
+                  </span>
+                  <span className="hidden sm:inline">
+                    Fonte:{" "}
+                    {isInitialLoad ? (
+                      <span className="text-slate-200">Carregando Bitrix…</span>
+                    ) : dashboardData.source === "bitrix" ? (
+                      <span className="text-emerald-200">Bitrix (webhook)</span>
+                    ) : (
+                      <span className="text-amber-200">dados locais</span>
+                    )}
+                    {isFetching && !isInitialLoad ? (
+                      <span className="text-slate-300"> · atualizando</span>
+                    ) : null}
+                    {dashboardData.error ? (
+                      <span className="text-red-200"> · {dashboardData.error}</span>
+                    ) : isError ? (
+                      <span className="text-red-200">
+                        {" "}
+                        · {error instanceof Error ? error.message : "Falha ao carregar dados"}
+                      </span>
+                    ) : null}
+                  </span>
                 </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={teamId === "overview"}
+                    onClick={() => handleTeamChange("overview")}
+                    className="dash-view-tab"
+                  >
+                    Visão Geral
+                  </button>
+                  {canSwitchPipeline ? (
+                    <PipelineSwitcher
+                      pipeline={activePipeline}
+                      onChange={handlePipelineChange}
+                    />
+                  ) : null}
+                </div>
+
+                <div className="flex shrink-0 flex-wrap items-center gap-2 sm:ml-auto sm:justify-end">
+                  <DashboardFilterTrigger
+                    activeCount={activeFilterCount}
+                    onClick={() => setFiltersOpen(true)}
+                  />
+                  {isAdministrator ? (
+                    <button
+                      type="button"
+                      onClick={onOpenAccessManagement}
+                      className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
+                      aria-label="Gestão de acesso"
+                    >
+                      <Shield className="h-4 w-4 shrink-0" aria-hidden />
+                      Acessos
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    onClick={() => void onSignOut()}
+                    className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
+                    aria-label={userEmail ? `Sair da conta ${userEmail}` : "Sair"}
+                    title={userEmail ?? undefined}
+                  >
+                    <LogOut className="h-4 w-4 shrink-0" aria-hidden />
+                    Sair
+                  </button>
+                </div>
               </div>
             </header>
 
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 pb-2">
-              <TeamTabNav
-                teamId={teamId}
-                teams={teams}
-                onChange={handleTeamChange}
-                accessibleTeamIds={accessibleTeamIds}
-              />
-              <div className="flex max-w-full flex-wrap items-center justify-end gap-2">
-                {canSwitchPipeline ? (
-                  <PipelineSwitcher
-                    pipeline={activePipeline}
-                    onChange={handlePipelineChange}
-                  />
-                ) : null}
-                <PeriodFilterButton
-                  month={month}
-                  onMonthChange={handleMonthChange}
-                  peakMonth={peakMonth}
-                />
-                {isAdministrator ? (
-                  <button
-                    type="button"
-                    onClick={onOpenAccessManagement}
-                    className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
-                    aria-label="Gestão de acesso"
-                  >
-                    <Shield className="h-4 w-4 shrink-0" aria-hidden />
-                    Acessos
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => void onSignOut()}
-                  className="dash-btn-ghost inline-flex h-10 items-center gap-2 rounded-lg px-3 text-sm font-semibold"
-                  aria-label={userEmail ? `Sair da conta ${userEmail}` : "Sair"}
-                  title={userEmail ?? undefined}
-                >
-                  <LogOut className="h-4 w-4 shrink-0" aria-hidden />
-                  Sair
-                </button>
-              </div>
-            </div>
+            <DashboardFilterSheet
+              open={filtersOpen}
+              onOpenChange={setFiltersOpen}
+              applied={{
+                pipeline: activePipeline,
+                teamId,
+                month,
+                diretoria,
+              }}
+              onApply={handleFiltersApply}
+              teams={teams}
+              canSwitchPipeline={canSwitchPipeline}
+              peakMonth={peakMonth}
+            />
           </div>
         </div>
 
-        <div className="dash-content mx-auto flex min-h-0 w-full max-w-[1600px] flex-1 flex-col px-4 pb-3 pt-3 md:px-6 md:pb-4">
+        <div className="dash-content dash-layout-wrap flex min-h-0 flex-1 flex-col pb-3 pt-3 md:pb-4">
           <MotionContext.Provider value={motionTier}>
             <AnimatedDashboardContent
               teamId={teamId}
               teams={teams}
               month={month}
+              pipeline={activePipeline}
+              diretoria={diretoria}
               trend={trend}
               trendMax={trendMax}
               onPickMonth={handleMonthChange}
+              onTeamSelect={handleTeamChange}
             />
           </MotionContext.Provider>
         </div>
-      </div>
     </div>
   );
 }
 
-const GLASS_SURFACE = "dash-glass";
+const KPI_METRIC = "dash-kpi-metric mt-2 block text-3xl font-bold tabular-nums text-slate-900";
 
-/** Coluna Neg. perd. — bordas e fundo só nesta célula, não em Prazos. */
+function TeamGlassKpiCard({
+  team,
+  active,
+  share,
+  index,
+  className,
+  onSelect,
+}: {
+  team: Team;
+  active: number;
+  share: number;
+  index: number;
+  className?: string;
+  onSelect?: () => void;
+}) {
+  return (
+    <GlassKpiCard
+      index={index}
+      tint={TEAM_ACCENT_SOFT[team.id]}
+      className={className}
+      onClick={onSelect}
+      ariaLabel={`Ver equipe ${team.name}`}
+    >
+      <p className={cn(LABEL_CHROME, "truncate tracking-widest")}>{team.name}</p>
+      <AnimatedNumber value={active} className={KPI_METRIC} />
+      <AnimatedShareBar
+        share={share}
+        accent={TEAM_ACCENT[team.id]}
+        delay={index * 90 + 180}
+      />
+      <p className="dash-kpi-footnote mt-1 text-xs text-slate-500">
+        {team.members.length} corretores · {(share * 100).toFixed(1)}% do funil ativo
+      </p>
+    </GlassKpiCard>
+  );
+}
+
+function PipelineBadge({ pipeline }: { pipeline: DashboardPipelineKey }) {
+  if (pipeline === "economico") {
+    return (
+      <span className="pipeline-badge pipeline-badge--economico">
+        <span className="pipeline-badge__dot" aria-hidden />
+        Esteira Econômico
+      </span>
+    );
+  }
+
+  return (
+    <span className="pipeline-badge pipeline-badge--comercial-geral">
+      <span className="pipeline-badge__dot" aria-hidden />
+      Esteira Comercial Geral
+    </span>
+  );
+}
 const NEG_PERD_COL =
   "min-w-[5rem] w-[5rem] border-x border-red-300/60 bg-red-50/80 px-3 py-3 text-center tabular-nums dark:border-red-900/50 dark:bg-red-950/15";
 const NEG_PERD_HEAD =
@@ -400,22 +516,6 @@ const BROKER_TABLE_PHASE = "min-w-[4.25rem] px-2.5 py-3 text-center tabular-nums
 const BROKER_TABLE_PHASE_LAST = "min-w-[4.25rem] px-2.5 py-3 pr-8 text-center tabular-nums";
 const BROKER_TABLE_LOST = "min-w-[4rem] px-3 py-3 text-center tabular-nums";
 const BROKER_TABLE_ATIVO = "min-w-[4rem] px-3 py-3 text-center font-semibold tabular-nums";
-
-function monthPresets(peakMonth: (typeof MONTHS)[number], year = 2026) {
-  const currentMonth = String(
-    new Date().getFullYear() === year ? new Date().getMonth() + 1 : 7,
-  ).padStart(2, "0") as (typeof MONTHS)[number];
-
-  return [
-    { id: "all" as const, label: "Ano todo", value: "all" as MonthFilter },
-    {
-      id: "current" as const,
-      label: "Mês atual",
-      value: MONTHS.includes(currentMonth) ? currentMonth : "07",
-    },
-    { id: "peak" as const, label: "Pico", value: peakMonth },
-  ];
-}
 
 function PipelineSwitcher({
   pipeline,
@@ -456,134 +556,52 @@ function PipelineSwitcher({
   );
 }
 
-function PeriodFilterButton({
-  month,
-  onMonthChange,
-  peakMonth,
-  year = 2026,
-}: {
-  month: MonthFilter;
-  onMonthChange: (m: MonthFilter) => void;
-  peakMonth: (typeof MONTHS)[number];
-  year?: number;
-}) {
-  const monthLabel = month === "all" ? "Ano todo" : MONTH_LABELS[month];
-  const presets = monthPresets(peakMonth, year);
-  const currentMonth = presets[1].value;
-
-  return (
-    <Select value={month} onValueChange={(value) => onMonthChange(value as MonthFilter)}>
-      <SelectTrigger
-        className="dash-filter-trigger h-10 w-auto min-w-36 gap-2 border-white! bg-white! text-slate-900! shadow-none hover:bg-slate-100!"
-        aria-label="Filtrar período"
-      >
-        <Filter className="h-4 w-4 shrink-0 text-slate-700" aria-hidden />
-        <span className="truncate">
-          Filtro · {year} · {monthLabel}
-        </span>
-      </SelectTrigger>
-      <SelectContent
-        position="popper"
-        align="end"
-        className="max-h-80 border-slate-200 bg-white text-slate-900 shadow-sm"
-      >
-        <SelectGroup>
-          <SelectLabel>Atalhos</SelectLabel>
-          <SelectItem value="all">Ano todo</SelectItem>
-          <SelectItem value={currentMonth}>Mês atual</SelectItem>
-          <SelectItem value={peakMonth}>Pico · {MONTH_LABELS[peakMonth]}</SelectItem>
-        </SelectGroup>
-        <SelectSeparator />
-        <SelectGroup>
-          <SelectLabel>Mês de {year}</SelectLabel>
-          {MONTHS.map((monthKey) => (
-            <SelectItem key={monthKey} value={monthKey}>
-              {MONTH_LABELS[monthKey]}
-            </SelectItem>
-          ))}
-        </SelectGroup>
-      </SelectContent>
-    </Select>
-  );
-}
-
-function TeamTabNav({
-  teamId,
-  teams,
-  onChange,
-  accessibleTeamIds,
-}: {
-  teamId: string;
-  teams: Team[];
-  onChange: (id: string) => void;
-  accessibleTeamIds: string[];
-}) {
-  const tabs = useMemo(
-    () =>
-      [
-        { id: "overview", label: "Visão Geral" },
-        ...teams.map((t) => ({
-          id: t.id,
-          label: t.name,
-        })),
-      ].filter((tab) => accessibleTeamIds.includes(tab.id)),
-    [teams, accessibleTeamIds],
-  );
-
-  return (
-    <nav aria-label="Equipes" className="min-w-0">
-      <div role="tablist" className="inline-flex max-w-full flex-wrap gap-1.5">
-        {tabs.map((tab) => {
-          const active = teamId === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              aria-pressed={active}
-              onClick={() => onChange(tab.id)}
-              className="nav-team-tab inline-flex h-9 items-center rounded-full px-4 text-sm font-semibold"
-            >
-              {tab.label}
-            </button>
-          );
-        })}
-      </div>
-    </nav>
-  );
-}
-
 function AnimatedDashboardContent({
   teamId,
   teams,
   month,
+  pipeline,
+  diretoria,
   trend,
   trendMax,
   onPickMonth,
+  onTeamSelect,
 }: {
   teamId: string;
   teams: Team[];
   month: MonthFilter;
+  pipeline: DashboardPipelineKey;
+  diretoria: DiretoriaFilter;
   trend: { month: (typeof MONTHS)[number]; value: number }[];
   trendMax: number;
   onPickMonth: (m: MonthFilter) => void;
+  onTeamSelect: (id: string) => void;
 }) {
   const selectedTeam = teamId === "overview" ? null : teams.find((t) => t.id === teamId);
+  const isScrollableOverview = teamId === "overview" && pipeline === "economico";
 
   return (
-    <div className="grid min-h-0 flex-1 [&>*]:col-start-1 [&>*]:row-start-1 [&>*]:min-h-0">
-      <div className="h-full min-h-0">
+    <div
+      className={cn(
+        isScrollableOverview
+          ? "pb-1"
+          : "grid min-h-0 min-h-full flex-1 [&>*]:col-start-1 [&>*]:row-start-1 [&>*]:min-h-0",
+      )}
+    >
+      <div className={cn(!isScrollableOverview && "h-full min-h-0")}>
         {teamId === "overview" ? (
           <Overview
             teams={teams}
             month={month}
+            pipeline={pipeline}
+            diretoria={diretoria}
             trend={trend}
             trendMax={trendMax}
             onPickMonth={onPickMonth}
+            onTeamSelect={onTeamSelect}
           />
         ) : selectedTeam ? (
-          <TeamView team={selectedTeam} month={month} />
+          <TeamView team={selectedTeam} month={month} pipeline={pipeline} />
         ) : (
           <div className="flex h-full items-center justify-center rounded-2xl border border-slate-200 bg-white/80 p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-400">
             Você não tem permissão para ver esta equipe.
@@ -841,7 +859,7 @@ function TrendMonthColumn({
               "absolute inset-x-0 bottom-0 rounded-t-md motion-safe:transition-[height,background-color] motion-safe:duration-500 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]",
               active
                 ? "bg-gradient-to-t from-violet-600 to-purple-400"
-                : "bg-violet-900/70 group-hover:bg-violet-700/80 dark:bg-violet-900/60 dark:group-hover:bg-violet-600/70",
+                : "bg-violet-200 group-hover:bg-violet-300",
             )}
             style={{ height: `${barHeight}%` }}
           />
@@ -867,88 +885,51 @@ function panelMotionClass(motionTier: MotionTier, delay?: string) {
   return delay ? { animationDelay: delay } : undefined;
 }
 
-function Overview({
-  teams,
+function OverviewAnalyticsSection({
   month,
   trend,
   trendMax,
   onPickMonth,
+  phaseTotals,
+  activeSum,
+  lostSum,
+  motionTier,
 }: {
-  teams: Team[];
   month: MonthFilter;
   trend: { month: (typeof MONTHS)[number]; value: number }[];
   trendMax: number;
   onPickMonth: (m: MonthFilter) => void;
+  phaseTotals: { phase: Phase; value: number }[];
+  activeSum: number;
+  lostSum: number;
+  motionTier: MotionTier;
 }) {
-  const motionTier = useMotionTier();
-  const teamTotals = teams.map((t) => ({
-    team: t,
-    active: teamActiveTotal(t, month),
-  }));
-  const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((p) => ({
-    phase: p,
-    value: teams.reduce((a, t) => a + teamPhaseTotal(t, p, month), 0),
-  }));
-  const activeSum = phaseTotals
-    .filter((x) => ACTIVE_PHASES.includes(x.phase))
-    .reduce((a, x) => a + x.value, 0);
-  const lostSum = phaseTotals
-    .filter((x) => LOST_PHASES.includes(x.phase))
-    .reduce((a, x) => a + x.value, 0);
-
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-12 lg:grid-rows-6">
-      <GlassKpiCard index={0} className="lg:col-span-3 lg:row-span-2">
-        <p className={cn(LABEL_CHROME, "tracking-widest")}>
-          {month === "all" ? "Funil ativo · 2026" : `Funil ativo · ${MONTH_LABELS[month]}/2026`}
-        </p>
-        <AnimatedNumber value={activeSum} className="mt-2 block text-5xl font-bold tabular-nums" />
-        <p className="mt-1 text-xs text-slate-500">
-          {teams.length} equipes · {teams.reduce((a, t) => a + t.members.length, 0)} corretores
-        </p>
-      </GlassKpiCard>
-
-      {teamTotals.map(({ team, active }, index) => {
-        const share = activeSum ? active / activeSum : 0;
-        return (
-          <GlassKpiCard key={team.id} index={index + 1} className="lg:col-span-3 lg:row-span-2">
-            <p className={cn(LABEL_CHROME, "tracking-widest")}>{team.name}</p>
-            <AnimatedNumber value={active} className="mt-2 block text-4xl font-bold tabular-nums" />
-            <AnimatedShareBar
-              share={share}
-              accent={TEAM_ACCENT[team.id]}
-              delay={(index + 1) * 90 + 180}
-            />
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {team.members.length} corretores · {(share * 100).toFixed(1)}% do funil ativo
-            </p>
-          </GlassKpiCard>
-        );
-      })}
-
+    <div className="grid dash-chart-grid">
       <Card
-        className={cn(motionTier === "full" && PANEL_ENTER, "lg:col-span-6 lg:row-span-4")}
-        style={panelMotionClass(motionTier, "320ms")}
+        className={cn(
+          motionTier === "full" && PANEL_ENTER,
+          "dash-chart-card dash-chart-card--lavender",
+        )}
+        style={panelMotionClass(motionTier, "280ms")}
       >
         <div className="flex shrink-0 items-baseline justify-between gap-3">
           <div>
             <h2 className="dash-heading">Chegada de leads · 2026</h2>
-            <p className="text-xs text-slate-500">
-              Por mês de criação · sem leads = em branco
-            </p>
+            <p className="text-xs text-slate-500">Por mês de criação · sem leads = em branco</p>
           </div>
-          {trend.some((t) => t.value > 0) && (
-            <p className="text-xs text-slate-500 dark:text-slate-400">
+          {trend.some((item) => item.value > 0) ? (
+            <p className="text-xs text-slate-500">
               Pico: {MONTH_LABELS[trend.reduce((a, b) => (b.value > a.value ? b : a)).month]}
             </p>
-          )}
+          ) : null}
         </div>
-        <div className="mt-4 flex min-h-0 flex-1 items-stretch gap-2">
-          {trend.map((t, index) => (
+        <div className="mt-4 flex min-h-[10rem] flex-1 items-stretch gap-1.5 sm:gap-2">
+          {trend.map((item, index) => (
             <TrendMonthColumn
-              key={t.month}
-              month={t.month}
-              value={t.value}
+              key={item.month}
+              month={item.month}
+              value={item.value}
               trendMax={trendMax}
               selectedMonth={month}
               index={index}
@@ -961,9 +942,9 @@ function Overview({
       <Card
         className={cn(
           motionTier === "full" && PANEL_ENTER,
-          "lg:col-span-6 lg:row-span-4 min-h-0 overflow-y-auto",
+          "dash-chart-card dash-chart-card--sky min-h-0 overflow-y-auto",
         )}
-        style={panelMotionClass(motionTier, "400ms")}
+        style={panelMotionClass(motionTier, "360ms")}
       >
         <h2 className="dash-heading">Distribuição por fase</h2>
         <p className="text-xs text-slate-500">
@@ -973,13 +954,8 @@ function Overview({
         <div className="mt-4 space-y-4">
           <div>
             <div className="mb-2 flex items-baseline justify-between">
-              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider")}>
-                Funil ativo
-              </h3>
-              <AnimatedNumber
-                value={activeSum}
-                className="text-xs tabular-nums text-slate-500 dark:text-slate-400"
-              />
+              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider")}>Funil ativo</h3>
+              <AnimatedNumber value={activeSum} className="text-xs tabular-nums text-slate-500" />
             </div>
             <StackedBar
               phases={ACTIVE_PHASES}
@@ -1003,10 +979,7 @@ function Overview({
               <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider text-red-400/90")}>
                 Perdas
               </h3>
-              <AnimatedNumber
-                value={lostSum}
-                className="text-xs tabular-nums text-slate-500 dark:text-slate-400"
-              />
+              <AnimatedNumber value={lostSum} className="text-xs tabular-nums text-slate-500" />
             </div>
             <StackedBar
               phases={LOST_PHASES}
@@ -1026,6 +999,286 @@ function Overview({
         </div>
       </Card>
     </div>
+  );
+}
+
+function ComercialGeralOverview({
+  teams,
+  month,
+  trend,
+  trendMax,
+  onPickMonth,
+  onTeamSelect,
+}: {
+  teams: Team[];
+  month: MonthFilter;
+  trend: { month: (typeof MONTHS)[number]; value: number }[];
+  trendMax: number;
+  onPickMonth: (m: MonthFilter) => void;
+  onTeamSelect: (id: string) => void;
+}) {
+  const motionTier = useMotionTier();
+  const teamTotals = teams.map((team) => ({
+    team,
+    active: teamActiveTotal(team, month),
+  }));
+  const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((phase) => ({
+    phase,
+    value: teams.reduce((sum, team) => sum + teamPhaseTotal(team, phase, month), 0),
+  }));
+  const activeSum = phaseTotals
+    .filter((item) => ACTIVE_PHASES.includes(item.phase))
+    .reduce((sum, item) => sum + item.value, 0);
+  const lostSum = phaseTotals
+    .filter((item) => LOST_PHASES.includes(item.phase))
+    .reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-12 lg:grid-rows-6">
+      <GlassKpiCard
+        index={0}
+        tint="from-violet-500/12 via-white to-white"
+        className="lg:col-span-3 lg:row-span-2"
+      >
+        <p className={cn(LABEL_CHROME, "tracking-widest")}>
+          {month === "all" ? "Funil ativo · 2026" : `Funil ativo · ${MONTH_LABELS[month]}/2026`}
+        </p>
+        <AnimatedNumber value={activeSum} className={KPI_METRIC} />
+        <p className="mt-1 text-xs text-slate-500">
+          {teams.length} equipes · {teams.reduce((sum, team) => sum + team.members.length, 0)} corretores
+        </p>
+      </GlassKpiCard>
+
+      {teamTotals.map(({ team, active }, index) => {
+        const share = activeSum ? active / activeSum : 0;
+        return (
+          <TeamGlassKpiCard
+            key={team.id}
+            team={team}
+            active={active}
+            share={share}
+            index={index + 1}
+            className="lg:col-span-3 lg:row-span-2"
+            onSelect={() => onTeamSelect(team.id)}
+          />
+        );
+      })}
+
+      <Card
+        className={cn(
+          motionTier === "full" && PANEL_ENTER,
+          "dash-chart-card dash-chart-card--lavender lg:col-span-6 lg:row-span-4",
+        )}
+        style={panelMotionClass(motionTier, "320ms")}
+      >
+        <div className="flex shrink-0 items-baseline justify-between gap-3">
+          <div>
+            <h2 className="dash-heading">Chegada de leads · 2026</h2>
+            <p className="text-xs text-slate-500">Por mês de criação · sem leads = em branco</p>
+          </div>
+          {trend.some((item) => item.value > 0) ? (
+            <p className="text-xs text-slate-500">
+              Pico: {MONTH_LABELS[trend.reduce((a, b) => (b.value > a.value ? b : a)).month]}
+            </p>
+          ) : null}
+        </div>
+        <div className="mt-4 flex min-h-[10rem] flex-1 items-stretch gap-1.5 sm:gap-2">
+          {trend.map((item, index) => (
+            <TrendMonthColumn
+              key={item.month}
+              month={item.month}
+              value={item.value}
+              trendMax={trendMax}
+              selectedMonth={month}
+              index={index}
+              onPickMonth={onPickMonth}
+            />
+          ))}
+        </div>
+      </Card>
+
+      <Card
+        className={cn(
+          motionTier === "full" && PANEL_ENTER,
+          "dash-chart-card dash-chart-card--sky lg:col-span-6 lg:row-span-4 min-h-0 overflow-y-auto",
+        )}
+        style={panelMotionClass(motionTier, "400ms")}
+      >
+        <h2 className="dash-heading">Distribuição por fase</h2>
+        <p className="text-xs text-slate-500">
+          {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`} · perdas separadas
+        </p>
+
+        <div className="mt-4 space-y-4">
+          <div>
+            <div className="mb-2 flex items-baseline justify-between">
+              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider")}>Funil ativo</h3>
+              <AnimatedNumber value={activeSum} className="text-xs tabular-nums text-slate-500" />
+            </div>
+            <StackedBar
+              phases={ACTIVE_PHASES}
+              totals={phaseTotals}
+              total={activeSum}
+              animateDelay={480}
+            />
+            <div className="mt-3">
+              <PhaseLegend
+                phases={ACTIVE_PHASES}
+                totals={phaseTotals}
+                total={activeSum}
+                animateDelay={560}
+                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
+              />
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-4">
+            <div className="mb-2 flex items-baseline justify-between">
+              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider text-red-400/90")}>
+                Perdas
+              </h3>
+              <AnimatedNumber value={lostSum} className="text-xs tabular-nums text-slate-500" />
+            </div>
+            <StackedBar
+              phases={LOST_PHASES}
+              totals={phaseTotals}
+              total={lostSum}
+              animateDelay={620}
+            />
+            <div className="mt-3">
+              <PhaseLegend
+                phases={LOST_PHASES}
+                totals={phaseTotals}
+                total={lostSum}
+                animateDelay={700}
+              />
+            </div>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
+function EconomicoOverview({
+  teams,
+  month,
+  trend,
+  trendMax,
+  onPickMonth,
+  onTeamSelect,
+}: {
+  teams: Team[];
+  month: MonthFilter;
+  trend: { month: (typeof MONTHS)[number]; value: number }[];
+  trendMax: number;
+  onPickMonth: (m: MonthFilter) => void;
+  onTeamSelect: (id: string) => void;
+}) {
+  const motionTier = useMotionTier();
+  const orderedTeams = useMemo(() => {
+    const focus = teams.filter((team) => isFocusMainTeamId(team.id));
+    const primeiraChave = teams.filter((team) => isPrimeiraChaveTeamId(team.id));
+    return [...focus, ...primeiraChave];
+  }, [teams]);
+  const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((phase) => ({
+    phase,
+    value: teams.reduce((sum, team) => sum + teamPhaseTotal(team, phase, month), 0),
+  }));
+  const activeSum = phaseTotals
+    .filter((item) => ACTIVE_PHASES.includes(item.phase))
+    .reduce((sum, item) => sum + item.value, 0);
+  const lostSum = phaseTotals
+    .filter((item) => LOST_PHASES.includes(item.phase))
+    .reduce((sum, item) => sum + item.value, 0);
+
+  return (
+    <div className="flex flex-col gap-2.5 pb-1 min-w-0 w-full">
+      <div className="dash-kpi-grid dash-kpi-grid--row">
+        <GlassKpiCard index={0} tint="from-violet-500/12 via-white to-white">
+          <p className={cn(LABEL_CHROME, "truncate tracking-widest")}>
+            {month === "all" ? "Funil ativo · 2026" : `Funil ativo · ${MONTH_LABELS[month]}/2026`}
+          </p>
+          <AnimatedNumber value={activeSum} className={KPI_METRIC} />
+          <p className="dash-kpi-footnote mt-1 text-xs text-slate-500">
+            {teams.length} equipes · {teams.reduce((sum, team) => sum + team.members.length, 0)} corretores
+          </p>
+        </GlassKpiCard>
+
+        {orderedTeams.map((team, index) => {
+          const active = teamActiveTotal(team, month);
+          const share = activeSum ? active / activeSum : 0;
+          return (
+            <TeamGlassKpiCard
+              key={team.id}
+              team={team}
+              active={active}
+              share={share}
+              index={index + 1}
+              onSelect={() => onTeamSelect(team.id)}
+            />
+          );
+        })}
+      </div>
+
+      <OverviewAnalyticsSection
+        month={month}
+        trend={trend}
+        trendMax={trendMax}
+        onPickMonth={onPickMonth}
+        phaseTotals={phaseTotals}
+        activeSum={activeSum}
+        lostSum={lostSum}
+        motionTier={motionTier}
+      />
+    </div>
+  );
+}
+
+function Overview({
+  teams,
+  month,
+  pipeline,
+  diretoria,
+  trend,
+  trendMax,
+  onPickMonth,
+  onTeamSelect,
+}: {
+  teams: Team[];
+  month: MonthFilter;
+  pipeline: DashboardPipelineKey;
+  diretoria: DiretoriaFilter;
+  trend: { month: (typeof MONTHS)[number]; value: number }[];
+  trendMax: number;
+  onPickMonth: (m: MonthFilter) => void;
+  onTeamSelect: (id: string) => void;
+}) {
+  const scopedTeams =
+    pipeline === "economico" ? filterTeamsByDiretoria(teams, diretoria) : teams;
+
+  if (pipeline === "economico") {
+    return (
+      <EconomicoOverview
+        teams={scopedTeams}
+        month={month}
+        trend={trend}
+        trendMax={trendMax}
+        onPickMonth={onPickMonth}
+        onTeamSelect={onTeamSelect}
+      />
+    );
+  }
+
+  return (
+    <ComercialGeralOverview
+      teams={scopedTeams}
+      month={month}
+      trend={trend}
+      trendMax={trendMax}
+      onPickMonth={onPickMonth}
+      onTeamSelect={onTeamSelect}
+    />
   );
 }
 
@@ -1056,9 +1309,18 @@ function TeamLeaderPortrait({ leader }: { leader: Team["leader"] }) {
   );
 }
 
-function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
+function TeamView({
+  team,
+  month,
+  pipeline,
+}: {
+  team: Team;
+  month: MonthFilter;
+  pipeline?: DashboardPipelineKey;
+}) {
   const motionTier = useMotionTier();
   const accent = TEAM_ACCENT[team.id];
+  const isPrimeiraChave = isPrimeiraChaveTeamId(team.id);
   const activeSum = teamActiveTotal(team, month);
 
   const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((p) => ({
@@ -1107,19 +1369,35 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
         )}
         style={panelMotionClass(motionTier, "80ms")}
       >
-        <div className="liquid-glass flex h-full justify-between gap-4 overflow-hidden rounded-2xl bg-white/20 p-4 text-slate-950 dark:bg-white/[0.035]">
+        <div
+          className={cn(
+            "dash-team-hero liquid-glass flex h-full justify-between gap-4 overflow-hidden rounded-xl p-4 text-slate-950",
+            "border border-white/55 bg-gradient-to-br",
+            TEAM_HERO_GLASS[team.id] ?? "from-violet-500/24 via-white/42 to-white/16",
+          )}
+        >
           <div className="flex min-w-0 flex-col justify-between">
             <div>
-              <p className="text-xs font-semibold tracking-[0.2em] text-slate-900">Equipe</p>
-              <h2 className="mt-1 text-2xl font-bold text-slate-950">{team.name}</h2>
-              <p className="text-xs text-slate-800">
+              {pipeline === "economico" && isPrimeiraChave ? (
+                <p className="text-[11px] font-semibold tracking-wide text-violet-600">
+                  Focus Primeira Chave
+                </p>
+              ) : isFocusMainTeamId(team.id) ? (
+                <p className="text-[11px] font-semibold tracking-wide text-violet-600">Focus</p>
+              ) : (
+                <p className="text-xs font-semibold tracking-[0.2em] text-slate-500">Equipe</p>
+              )}
+              <h2 className="mt-1 text-2xl font-bold text-slate-900">
+                {isFocusMainTeamId(team.id) ? focusMainTeamTabLabel(team.name) : team.name}
+              </h2>
+              <p className="text-xs text-slate-600">
                 {team.members.length} corretores ·{" "}
                 {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`}
               </p>
             </div>
             <div>
-              <p className="text-xs font-semibold tracking-widest text-slate-900">Funil ativo</p>
-              <AnimatedNumber value={activeSum} className="text-4xl font-bold tabular-nums text-slate-950" />
+              <p className="text-xs font-semibold tracking-widest text-slate-500">Funil ativo</p>
+              <AnimatedNumber value={activeSum} className="text-3xl font-bold tabular-nums text-slate-900" />
             </div>
           </div>
           <TeamLeaderPortrait leader={team.leader} />
@@ -1177,7 +1455,6 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
       </Card>
 
       <Card
-        glass
         className={cn(motionTier === "full" && PANEL_ENTER, "lg:col-span-12 lg:row-span-4 min-h-0")}
         style={panelMotionClass(motionTier, "240ms")}
       >
@@ -1392,26 +1669,20 @@ function TeamView({ team, month }: { team: Team; month: MonthFilter }) {
 function Card({
   children,
   className = "",
-  accent,
-  glass = false,
   style,
 }: {
   children: React.ReactNode;
   className?: string;
-  accent?: string;
-  glass?: boolean;
   style?: React.CSSProperties;
 }) {
   return (
     <div
       className={cn(
-        "liquid-glass relative flex min-h-0 flex-col overflow-hidden rounded-2xl p-4",
-        glass ? GLASS_SURFACE : "dash-panel",
+        "dash-panel relative flex min-h-0 flex-col overflow-hidden rounded-xl p-3",
         className,
       )}
       style={style}
     >
-      {accent && <div className={`absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r ${accent}`} />}
       {children}
     </div>
   );
@@ -1421,24 +1692,45 @@ function GlassKpiCard({
   children,
   className = "",
   index = 0,
+  tint,
+  onClick,
+  ariaLabel,
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   className?: string;
   index?: number;
+  tint?: string;
+  onClick?: () => void;
+  ariaLabel?: string;
 }) {
   const motionTier = useMotionTier();
+  const classNames = cn(
+    "dash-kpi-card liquid-glass",
+    tint && `bg-gradient-to-br ${tint}`,
+    motionTier === "full" &&
+      "kpi-enter motion-safe:animate-[kpi-enter_0.55s_cubic-bezier(0.16,1,0.3,1)_both]",
+    onClick &&
+      "cursor-pointer appearance-none font-inherit text-left text-inherit transition hover:brightness-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500/50",
+    className,
+  );
+  const style = motionTier === "full" ? { animationDelay: `${index * 80}ms` } : undefined;
+
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={classNames}
+        style={style}
+        aria-label={ariaLabel}
+      >
+        {children}
+      </button>
+    );
+  }
 
   return (
-    <div
-      className={cn(
-        "liquid-glass relative flex min-h-0 flex-col overflow-hidden rounded-2xl p-4",
-        motionTier === "full" &&
-          "kpi-enter motion-safe:animate-[kpi-enter_0.55s_cubic-bezier(0.16,1,0.3,1)_both] motion-safe:transition-[border-color,background-color] motion-safe:duration-300",
-        GLASS_SURFACE,
-        className,
-      )}
-      style={motionTier === "full" ? { animationDelay: `${index * 80}ms` } : undefined}
-    >
+    <div className={classNames} style={style}>
       {children}
     </div>
   );
@@ -1503,7 +1795,7 @@ function AnimatedShareBar({
   }, [share, delay, motionTier]);
 
   return (
-    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+    <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
       <div
         className={cn(
           "h-full bg-gradient-to-r motion-safe:transition-[width] motion-safe:duration-700 motion-safe:ease-[cubic-bezier(0.16,1,0.3,1)]",

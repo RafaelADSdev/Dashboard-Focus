@@ -184,6 +184,28 @@ export function isPrimeiraChaveTeamId(teamId: string): boolean {
   return PRIMEIRA_CHAVE_TEAM_IDS.has(teamId);
 }
 
+const FOCUS_MAIN_TEAM_IDS = new Set(["elite", "lider", "total"]);
+
+export function isFocusMainTeamId(teamId: string): boolean {
+  return FOCUS_MAIN_TEAM_IDS.has(teamId);
+}
+
+export type DiretoriaFilter = "all" | "focus" | "primeira_chave";
+
+export function filterTeamsByDiretoria<T extends { id: string }>(
+  teams: T[],
+  diretoria: DiretoriaFilter,
+): T[] {
+  if (diretoria === "all") return teams;
+  return diretoria === "focus"
+    ? teams.filter((team) => isFocusMainTeamId(team.id))
+    : teams.filter((team) => isPrimeiraChaveTeamId(team.id));
+}
+
+export function focusMainTeamTabLabel(name: string): string {
+  return name.replace(/^Focus\s+/i, "");
+}
+
 export function slugifyTeamId(name: string): string {
   return name
     .normalize("NFD")

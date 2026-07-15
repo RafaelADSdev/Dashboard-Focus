@@ -293,6 +293,28 @@ export const TEAM_ACCENT: Record<string, string> = {
   lobos: "from-slate-500 to-zinc-500",
 };
 
+/** Lavagem suave de fundo para cards compactos da esteira Econômico */
+export const TEAM_ACCENT_SOFT: Record<string, string> = {
+  elite: "from-violet-500/10 via-white to-white",
+  lider: "from-emerald-500/10 via-white to-white",
+  total: "from-amber-500/10 via-white to-white",
+  imparaveis: "from-sky-500/10 via-white to-white",
+  domina: "from-rose-500/10 via-white to-white",
+  legado: "from-indigo-500/10 via-white to-white",
+  lobos: "from-slate-500/10 via-white to-white",
+};
+
+/** Gradiente translúcido para o card do líder (glassmorphism por equipe) */
+export const TEAM_HERO_GLASS: Record<string, string> = {
+  elite: "from-violet-500/24 via-white/42 to-white/16",
+  lider: "from-emerald-500/24 via-white/42 to-white/16",
+  total: "from-amber-500/24 via-white/42 to-white/16",
+  imparaveis: "from-sky-500/24 via-white/42 to-white/16",
+  domina: "from-rose-500/24 via-white/42 to-white/16",
+  legado: "from-indigo-500/24 via-white/42 to-white/16",
+  lobos: "from-slate-500/24 via-white/42 to-white/16",
+};
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return "?";
