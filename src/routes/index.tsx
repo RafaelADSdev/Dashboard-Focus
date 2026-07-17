@@ -586,7 +586,7 @@ function AnimatedDashboardContent({
   onTeamSelect: (id: string) => void;
 }) {
   const selectedTeam = teamId === "overview" ? null : teams.find((t) => t.id === teamId);
-  const isScrollableOverview = teamId === "overview" && pipeline === "economico";
+  const isScrollableOverview = teamId === "overview";
 
   return (
     <div
@@ -1035,10 +1035,6 @@ function ComercialGeralOverview({
   onTeamSelect: (id: string) => void;
 }) {
   const motionTier = useMotionTier();
-  const teamTotals = teams.map((team) => ({
-    team,
-    active: teamActiveTotal(team, month),
-  }));
   const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((phase) => ({
     phase,
     value: teams.reduce((sum, team) => sum + teamPhaseTotal(team, phase, month), 0),
@@ -1051,128 +1047,47 @@ function ComercialGeralOverview({
     .reduce((sum, item) => sum + item.value, 0);
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-12 lg:grid-rows-6">
-      <GlassKpiCard
-        index={0}
-        tint="from-violet-500/12 via-white to-white"
-        className="lg:col-span-3 lg:row-span-2"
-      >
-        <p className={cn(LABEL_CHROME, "tracking-widest")}>
-          {month === "all" ? "Funil ativo · 2026" : `Funil ativo · ${MONTH_LABELS[month]}/2026`}
-        </p>
-        <AnimatedNumber value={activeSum} className={KPI_METRIC} />
-        <p className="mt-1 text-xs text-slate-500">
-          {teams.length} equipes · {teams.reduce((sum, team) => sum + teamBrokerCount(team), 0)} corretores
-        </p>
-      </GlassKpiCard>
+    <div className="flex min-w-0 w-full flex-col gap-2.5 pb-1">
+      <div className="dash-kpi-grid dash-kpi-grid--row">
+        <GlassKpiCard index={0} tint="from-violet-500/12 via-white to-white">
+          <p className={cn(LABEL_CHROME, "truncate tracking-widest")}>
+            {month === "all" ? "Funil ativo · 2026" : `Funil ativo · ${MONTH_LABELS[month]}/2026`}
+          </p>
+          <AnimatedNumber value={activeSum} className={KPI_METRIC} />
+          <p className="dash-kpi-footnote mt-1 text-xs text-slate-500">
+            {teams.length} equipes · {teams.reduce((sum, team) => sum + teamBrokerCount(team), 0)} corretores
+          </p>
+        </GlassKpiCard>
 
-      {teamTotals.map(({ team, active }, index) => {
-        const share = activeSum ? active / activeSum : 0;
-        return (
-          <TeamGlassKpiCard
-            key={team.id}
-            team={team}
-            active={active}
-            share={share}
-            index={index + 1}
-            className="lg:col-span-3 lg:row-span-2"
-            onSelect={() => onTeamSelect(team.id)}
-          />
-        );
-      })}
-
-      <Card
-        className={cn(
-          motionTier === "full" && PANEL_ENTER,
-          "dash-chart-card dash-chart-card--lavender lg:col-span-6 lg:row-span-4",
-        )}
-        style={panelMotionClass(motionTier, "320ms")}
-      >
-        <div className="flex shrink-0 items-baseline justify-between gap-3">
-          <div>
-            <h2 className="dash-heading">Chegada de leads · 2026</h2>
-            <p className="text-xs text-slate-500">Por mês de criação · sem leads = em branco</p>
-          </div>
-          {trend.some((item) => item.value > 0) ? (
-            <p className="text-xs text-slate-500">
-              Pico: {MONTH_LABELS[trend.reduce((a, b) => (b.value > a.value ? b : a)).month]}
-            </p>
-          ) : null}
-        </div>
-        <div className="mt-4 flex min-h-[10rem] flex-1 items-stretch gap-1.5 sm:gap-2">
-          {trend.map((item, index) => (
-            <TrendMonthColumn
-              key={item.month}
-              month={item.month}
-              value={item.value}
-              trendMax={trendMax}
-              selectedMonth={month}
-              index={index}
-              onPickMonth={onPickMonth}
+        {teams.map((team, index) => {
+          const active = teamActiveTotal(team, month);
+          const share = activeSum ? active / activeSum : 0;
+          return (
+            <TeamGlassKpiCard
+              key={team.id}
+              team={team}
+              active={active}
+              share={share}
+              index={index + 1}
+              onSelect={() => onTeamSelect(team.id)}
             />
-          ))}
-        </div>
-      </Card>
+          );
+        })}
+      </div>
 
-      <Card
-        className={cn(
-          motionTier === "full" && PANEL_ENTER,
-          "dash-chart-card dash-chart-card--sky lg:col-span-6 lg:row-span-4 min-h-0 overflow-y-auto",
-        )}
-        style={panelMotionClass(motionTier, "400ms")}
-      >
-        <h2 className="dash-heading">Distribuição por fase</h2>
-        <p className="text-xs text-slate-500">
-          {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`} · perdas separadas
-        </p>
-
-        <div className="mt-4 space-y-4">
-          <div>
-            <div className="mb-2 flex items-baseline justify-between">
-              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider")}>Funil ativo</h3>
-              <AnimatedNumber value={activeSum} className="text-xs tabular-nums text-slate-500" />
-            </div>
-            <StackedBar
-              phases={ACTIVE_PHASES}
-              totals={phaseTotals}
-              total={activeSum}
-              animateDelay={480}
-            />
-            <div className="mt-3">
-              <PhaseLegend
-                phases={ACTIVE_PHASES}
-                totals={phaseTotals}
-                total={activeSum}
-                animateDelay={560}
-                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
-              />
-            </div>
-          </div>
-
-          <div className="border-t border-slate-200 pt-4">
-            <div className="mb-2 flex items-baseline justify-between">
-              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider text-red-400/90")}>
-                Perdas
-              </h3>
-              <AnimatedNumber value={lostSum} className="text-xs tabular-nums text-slate-500" />
-            </div>
-            <StackedBar
-              phases={LOST_PHASES}
-              totals={phaseTotals}
-              total={lostSum}
-              animateDelay={620}
-            />
-            <div className="mt-3">
-              <PhaseLegend
-                phases={LOST_PHASES}
-                totals={phaseTotals}
-                total={lostSum}
-                animateDelay={700}
-              />
-            </div>
-          </div>
-        </div>
-      </Card>
+      <OverviewAnalyticsSection
+        month={month}
+        trend={trend}
+        trendMax={trendMax}
+        onPickMonth={onPickMonth}
+        phaseTotals={phaseTotals}
+        activeSum={activeSum}
+        lostSum={lostSum}
+        motionTier={motionTier}
+        activePhases={ACTIVE_PHASES}
+        lostPhases={LOST_PHASES}
+        legendSections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
+      />
     </div>
   );
 }
