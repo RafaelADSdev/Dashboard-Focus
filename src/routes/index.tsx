@@ -230,10 +230,11 @@ function Dashboard({
     data?.pipeline === activePipeline ? data : placeholder;
   const teams = useMemo(
     () =>
-      (dashboardData.teams ?? []).filter((team) =>
-        isTeamVisibleInPipeline(team.id, activePipeline),
+      (dashboardData.teams ?? []).filter(
+        (team) =>
+          isTeamVisibleInPipeline(team.id, activePipeline) && canAccessTeam(team.id),
       ),
-    [dashboardData.teams, activePipeline],
+    [dashboardData.teams, activePipeline, canAccessTeam],
   );
   const isInitialLoad =
     isFetching && dashboardData.source === "unavailable" && !dashboardData.error && !isError;
@@ -245,9 +246,9 @@ function Dashboard({
 
   useEffect(() => {
     if (teamId !== "overview" && !teams.some((t) => t.id === teamId)) {
-      setTeamId("overview");
+      setTeamId(canAccessTeam("overview") ? "overview" : (teams[0]?.id ?? "overview"));
     }
-  }, [teams, teamId]);
+  }, [teams, teamId, canAccessTeam]);
 
   const handleMonthChange = useCallback((m: MonthFilter) => {
     setMotionTier("full");
@@ -255,9 +256,10 @@ function Dashboard({
   }, []);
 
   const handleTeamChange = useCallback((id: string) => {
+    if (!canAccessTeam(id)) return;
     setMotionTier("instant");
     setTeamId(id);
-  }, []);
+  }, [canAccessTeam]);
 
   const handlePipelineChange = useCallback((pipeline: DashboardPipelineKey) => {
     if (!canAccessPipeline(pipeline)) return;
@@ -276,10 +278,10 @@ function Dashboard({
         setMotionTier(filters.teamId === "overview" ? "full" : "instant");
       }
       setMonth(filters.month);
-      setTeamId(filters.teamId);
+      setTeamId(canAccessTeam(filters.teamId) ? filters.teamId : "overview");
       setDiretoria(filters.diretoria);
     },
-    [activePipeline, canAccessPipeline],
+    [activePipeline, canAccessPipeline, canAccessTeam],
   );
 
   const activeFilterCount = useMemo(() => {
@@ -308,12 +310,10 @@ function Dashboard({
     [trend],
   );
 
-  const accessibleTeamIds = useMemo(() => {
-    const ids = ["overview", ...teams.map((team) => team.id)];
-    return ids.filter(
-      (id) => isTeamVisibleInPipeline(id, activePipeline) && canAccessTeam(id),
-    );
-  }, [teams, canAccessTeam, activePipeline]);
+  const accessibleTeamIds = useMemo(
+    () => ["overview", ...teams.map((team) => team.id)].filter((id) => canAccessTeam(id)),
+    [teams, canAccessTeam],
+  );
 
   useEffect(() => {
     if (accessibleTeamIds.length === 0) return;
@@ -368,19 +368,22 @@ function Dashboard({
 
               <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pb-0.5">
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    role="tab"
-                    aria-selected={teamId === "overview"}
-                    onClick={() => handleTeamChange("overview")}
-                    className="dash-view-tab"
-                  >
-                    Visão Geral
-                  </button>
+                  {canAccessTeam("overview") ? (
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={teamId === "overview"}
+                      onClick={() => handleTeamChange("overview")}
+                      className="dash-view-tab"
+                    >
+                      Visão Geral
+                    </button>
+                  ) : null}
                   {canSwitchPipeline ? (
                     <PipelineSwitcher
                       pipeline={activePipeline}
                       onChange={handlePipelineChange}
+                      canAccessPipeline={canAccessPipeline}
                     />
                   ) : null}
                 </div>
@@ -520,10 +523,15 @@ const BROKER_TABLE_ATIVO = "min-w-[4rem] px-3 py-3 text-center font-semibold tab
 function PipelineSwitcher({
   pipeline,
   onChange,
+  canAccessPipeline,
 }: {
   pipeline: DashboardPipelineKey;
   onChange: (pipeline: DashboardPipelineKey) => void;
+  canAccessPipeline: (pipelineKey: DashboardPipelineKey) => boolean;
 }) {
+  const availablePipelines = DASHBOARD_PIPELINES.filter((item) => canAccessPipeline(item.key));
+  if (availablePipelines.length <= 1) return null;
+
   return (
     <nav
       aria-label="Alternar esteira"
@@ -533,7 +541,7 @@ function PipelineSwitcher({
         <Repeat2 className="h-3.5 w-3.5" aria-hidden />
         Esteira
       </span>
-      {DASHBOARD_PIPELINES.map((item) => {
+      {availablePipelines.map((item) => {
         const active = pipeline === item.key;
         return (
           <button
