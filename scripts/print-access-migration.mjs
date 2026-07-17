@@ -8,6 +8,7 @@ const migrations = [
   "20260715103000_access_control.sql",
   "20260715120000_dashboard_pipelines.sql",
   "20260715130000_pipeline_access_ambas.sql",
+  "20260717103000_economico_dashboard_pages.sql",
 ];
 
 console.log("Aplique estes SQL no Supabase → SQL Editor:\n");

@@ -3,7 +3,7 @@ import {
   DEFAULT_PIPELINE_KEY,
   type DashboardPipelineKey,
 } from "@/lib/access-control";
-import { DASHBOARD_YEAR, type DashboardPayload } from "@/lib/dashboard-payload";
+import { DASHBOARD_YEAR, DASHBOARD_DATA_VERSION, type DashboardPayload } from "@/lib/dashboard-payload";
 
 export type { DashboardPayload } from "@/lib/dashboard-payload";
 export { DASHBOARD_YEAR, createPlaceholderDashboard } from "@/lib/dashboard-payload";
@@ -25,7 +25,7 @@ export const warmDashboardCache = createServerFn({ method: "GET" })
 
 export function dashboardQueryOptions(pipeline: DashboardPipelineKey = DEFAULT_PIPELINE_KEY) {
   return {
-    queryKey: ["dashboard", DASHBOARD_YEAR, pipeline] as const,
+    queryKey: ["dashboard", DASHBOARD_YEAR, pipeline, DASHBOARD_DATA_VERSION] as const,
     queryFn: () => getDashboardData({ data: { pipeline } }),
     staleTime: 15 * 60 * 1_000,
     refetchOnWindowFocus: false as const,

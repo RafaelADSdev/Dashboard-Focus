@@ -49,6 +49,9 @@ import {
   ATTENDANCE_STATUS_GROUP_LABEL,
   ATTENDANCE_STATUS_PHASES,
   LOST_PHASES,
+  getActivePhases,
+  getFunnelLegendSections,
+  getLostPhases,
   MONTHS,
   MONTH_LABELS,
   PHASE_COLORS,
@@ -61,6 +64,8 @@ import {
   memberPhaseValue,
   monthlyTrend,
   teamActiveTotal,
+  teamBrokerCount,
+  teamBrokerMembers,
   teamPhaseTotal,
   type MonthFilter,
   type Phase,
@@ -303,7 +308,7 @@ function Dashboard({
     return teams;
   }, [teams, teamId, activePipeline, diretoria]);
 
-  const trend = useMemo(() => monthlyTrend(trendTeams), [trendTeams]);
+  const trend = useMemo(() => monthlyTrend(trendTeams, activePipeline), [trendTeams, activePipeline]);
   const trendMax = Math.max(...trend.map((t) => t.value), 1);
   const peakMonth = useMemo(
     () => trend.reduce((a, b) => (b.value > a.value ? b : a)).month,
@@ -348,8 +353,10 @@ function Dashboard({
                       <span className="text-slate-200">Carregando Bitrix…</span>
                     ) : dashboardData.source === "bitrix" ? (
                       <span className="text-emerald-200">Bitrix (webhook)</span>
+                    ) : dashboardData.error ? (
+                      <span className="text-red-200">Bitrix indisponível</span>
                     ) : (
-                      <span className="text-amber-200">dados locais</span>
+                      <span className="text-amber-200">aguardando dados</span>
                     )}
                     {isFetching && !isInitialLoad ? (
                       <span className="text-slate-300"> · atualizando</span>
@@ -484,7 +491,7 @@ function TeamGlassKpiCard({
         delay={index * 90 + 180}
       />
       <p className="dash-kpi-footnote mt-1 text-xs text-slate-500">
-        {team.members.length} corretores · {(share * 100).toFixed(1)}% do funil ativo
+        {teamBrokerCount(team)} corretores · {(share * 100).toFixed(1)}% do funil ativo
       </p>
     </GlassKpiCard>
   );
@@ -894,6 +901,9 @@ function OverviewAnalyticsSection({
   activeSum,
   lostSum,
   motionTier,
+  activePhases,
+  lostPhases,
+  legendSections,
 }: {
   month: MonthFilter;
   trend: { month: (typeof MONTHS)[number]; value: number }[];
@@ -903,6 +913,9 @@ function OverviewAnalyticsSection({
   activeSum: number;
   lostSum: number;
   motionTier: MotionTier;
+  activePhases: Phase[];
+  lostPhases: Phase[];
+  legendSections: typeof ACTIVE_FUNNEL_LEGEND_SECTIONS;
 }) {
   return (
     <div className="grid dash-chart-grid">
@@ -948,7 +961,8 @@ function OverviewAnalyticsSection({
       >
         <h2 className="dash-heading">Distribuição por fase</h2>
         <p className="text-xs text-slate-500">
-          {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`} · perdas separadas
+          {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`}
+          {lostPhases.length > 0 ? " · perdas separadas" : ""}
         </p>
 
         <div className="mt-4 space-y-4">
@@ -958,44 +972,46 @@ function OverviewAnalyticsSection({
               <AnimatedNumber value={activeSum} className="text-xs tabular-nums text-slate-500" />
             </div>
             <StackedBar
-              phases={ACTIVE_PHASES}
+              phases={activePhases}
               totals={phaseTotals}
               total={activeSum}
               animateDelay={480}
             />
             <div className="mt-3">
               <PhaseLegend
-                phases={ACTIVE_PHASES}
+                phases={activePhases}
                 totals={phaseTotals}
                 total={activeSum}
                 animateDelay={560}
-                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
+                sections={legendSections}
               />
             </div>
           </div>
 
-          <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
-            <div className="mb-2 flex items-baseline justify-between">
-              <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider text-red-400/90")}>
-                Perdas
-              </h3>
-              <AnimatedNumber value={lostSum} className="text-xs tabular-nums text-slate-500" />
-            </div>
-            <StackedBar
-              phases={LOST_PHASES}
-              totals={phaseTotals}
-              total={lostSum}
-              animateDelay={620}
-            />
-            <div className="mt-3">
-              <PhaseLegend
-                phases={LOST_PHASES}
+          {lostPhases.length > 0 ? (
+            <div className="border-t border-slate-200 pt-4 dark:border-slate-800">
+              <div className="mb-2 flex items-baseline justify-between">
+                <h3 className={cn(LABEL_CHROME, "font-semibold tracking-wider text-red-400/90")}>
+                  Perdas
+                </h3>
+                <AnimatedNumber value={lostSum} className="text-xs tabular-nums text-slate-500" />
+              </div>
+              <StackedBar
+                phases={lostPhases}
                 totals={phaseTotals}
                 total={lostSum}
-                animateDelay={700}
+                animateDelay={620}
               />
+              <div className="mt-3">
+                <PhaseLegend
+                  phases={lostPhases}
+                  totals={phaseTotals}
+                  total={lostSum}
+                  animateDelay={700}
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </Card>
     </div>
@@ -1045,7 +1061,7 @@ function ComercialGeralOverview({
         </p>
         <AnimatedNumber value={activeSum} className={KPI_METRIC} />
         <p className="mt-1 text-xs text-slate-500">
-          {teams.length} equipes · {teams.reduce((sum, team) => sum + team.members.length, 0)} corretores
+          {teams.length} equipes · {teams.reduce((sum, team) => sum + teamBrokerCount(team), 0)} corretores
         </p>
       </GlassKpiCard>
 
@@ -1176,20 +1192,23 @@ function EconomicoOverview({
   onTeamSelect: (id: string) => void;
 }) {
   const motionTier = useMotionTier();
+  const activePhases = getActivePhases("economico");
+  const lostPhases = getLostPhases("economico");
+  const legendSections = getFunnelLegendSections("economico");
   const orderedTeams = useMemo(() => {
     const focus = teams.filter((team) => isFocusMainTeamId(team.id));
     const primeiraChave = teams.filter((team) => isPrimeiraChaveTeamId(team.id));
     return [...focus, ...primeiraChave];
   }, [teams]);
-  const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((phase) => ({
+  const phaseTotals = [...activePhases, ...lostPhases].map((phase) => ({
     phase,
     value: teams.reduce((sum, team) => sum + teamPhaseTotal(team, phase, month), 0),
   }));
   const activeSum = phaseTotals
-    .filter((item) => ACTIVE_PHASES.includes(item.phase))
+    .filter((item) => activePhases.includes(item.phase))
     .reduce((sum, item) => sum + item.value, 0);
   const lostSum = phaseTotals
-    .filter((item) => LOST_PHASES.includes(item.phase))
+    .filter((item) => lostPhases.includes(item.phase))
     .reduce((sum, item) => sum + item.value, 0);
 
   return (
@@ -1201,12 +1220,12 @@ function EconomicoOverview({
           </p>
           <AnimatedNumber value={activeSum} className={KPI_METRIC} />
           <p className="dash-kpi-footnote mt-1 text-xs text-slate-500">
-            {teams.length} equipes · {teams.reduce((sum, team) => sum + team.members.length, 0)} corretores
+            {teams.length} equipes · {teams.reduce((sum, team) => sum + teamBrokerCount(team), 0)} corretores
           </p>
         </GlassKpiCard>
 
         {orderedTeams.map((team, index) => {
-          const active = teamActiveTotal(team, month);
+          const active = teamActiveTotal(team, month, "economico");
           const share = activeSum ? active / activeSum : 0;
           return (
             <TeamGlassKpiCard
@@ -1230,6 +1249,9 @@ function EconomicoOverview({
         activeSum={activeSum}
         lostSum={lostSum}
         motionTier={motionTier}
+        activePhases={activePhases}
+        lostPhases={lostPhases}
+        legendSections={legendSections}
       />
     </div>
   );
@@ -1312,7 +1334,7 @@ function TeamLeaderPortrait({ leader }: { leader: Team["leader"] }) {
 function TeamView({
   team,
   month,
-  pipeline,
+  pipeline = "comercial_geral",
 }: {
   team: Team;
   month: MonthFilter;
@@ -1321,18 +1343,22 @@ function TeamView({
   const motionTier = useMotionTier();
   const accent = TEAM_ACCENT[team.id];
   const isPrimeiraChave = isPrimeiraChaveTeamId(team.id);
-  const activeSum = teamActiveTotal(team, month);
+  const isEconomico = pipeline === "economico";
+  const activePhases = getActivePhases(pipeline);
+  const lostPhases = getLostPhases(pipeline);
+  const legendSections = getFunnelLegendSections(pipeline);
+  const activeSum = teamActiveTotal(team, month, pipeline);
 
-  const phaseTotals = [...ACTIVE_PHASES, ...LOST_PHASES].map((p) => ({
+  const phaseTotals = [...activePhases, ...lostPhases].map((p) => ({
     phase: p,
     value: teamPhaseTotal(team, p, month),
   }));
   const lostSum = phaseTotals
-    .filter((x) => LOST_PHASES.includes(x.phase))
+    .filter((x) => lostPhases.includes(x.phase))
     .reduce((a, x) => a + x.value, 0);
 
-  const members = [...team.members]
-    .map((m) => ({ member: m, active: memberActiveTotal(m, month) }))
+  const members = [...teamBrokerMembers(team)]
+    .map((m) => ({ member: m, active: memberActiveTotal(m, month, pipeline) }))
     .sort((a, b) => {
       const aOnTeam = a.member.active !== false;
       const bOnTeam = b.member.active !== false;
@@ -1351,13 +1377,14 @@ function TeamView({
     return map[p] ?? PHASE_SHORT_LABELS[p] ?? p;
   };
 
-  const activePhasesBeforeAttendance = ACTIVE_PHASES.slice(
-    0,
-    ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[0]),
-  );
-  const activePhasesAfterAttendance = ACTIVE_PHASES.slice(
-    ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[ATTENDANCE_STATUS_PHASES.length - 1]) + 1,
-  );
+  const activePhasesBeforeAttendance = isEconomico
+    ? []
+    : ACTIVE_PHASES.slice(0, ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[0]));
+  const activePhasesAfterAttendance = isEconomico
+    ? []
+    : ACTIVE_PHASES.slice(
+        ACTIVE_PHASES.indexOf(ATTENDANCE_STATUS_PHASES[ATTENDANCE_STATUS_PHASES.length - 1]) + 1,
+      );
 
   return (
     <div className="grid h-full min-h-0 grid-cols-1 gap-3 lg:grid-cols-12 lg:grid-rows-6">
@@ -1391,7 +1418,7 @@ function TeamView({
                 {isFocusMainTeamId(team.id) ? focusMainTeamTabLabel(team.name) : team.name}
               </h2>
               <p className="text-xs text-slate-600">
-                {team.members.length} corretores ·{" "}
+                {teamBrokerCount(team)} corretores ·{" "}
                 {month === "all" ? "Ano de 2026" : `${MONTH_LABELS[month]}/2026`}
               </p>
             </div>
@@ -1409,48 +1436,50 @@ function TeamView({
         style={panelMotionClass(motionTier, "160ms")}
       >
         <h3 className="dash-heading">Distribuição por fase</h3>
-        <div className="mt-3 grid gap-4 md:grid-cols-2">
+        <div className={cn("mt-3 grid gap-4", lostPhases.length > 0 ? "md:grid-cols-2" : "")}>
           <div>
             <div className={cn(LABEL_CHROME, "mb-1.5 flex justify-between font-semibold tracking-wider")}>
               <span>Funil ativo</span>
               <AnimatedNumber value={activeSum} className="tabular-nums" />
             </div>
             <StackedBar
-              phases={ACTIVE_PHASES}
+              phases={activePhases}
               totals={phaseTotals}
               total={activeSum}
               animateDelay={260}
             />
             <div className="mt-2">
               <PhaseLegend
-                phases={ACTIVE_PHASES}
+                phases={activePhases}
                 totals={phaseTotals}
                 total={activeSum}
                 animateDelay={340}
-                sections={ACTIVE_FUNNEL_LEGEND_SECTIONS}
+                sections={legendSections}
               />
             </div>
           </div>
-          <div className="border-t border-slate-200 pt-3 md:border-l md:border-t-0 md:pl-4 md:pt-0 dark:border-slate-800">
-            <div className={cn(LABEL_CHROME, "mb-1.5 flex justify-between font-semibold tracking-wider text-red-400/90")}>
-              <span>Perdas</span>
-              <AnimatedNumber value={lostSum} className="tabular-nums text-slate-600 dark:text-slate-300" />
-            </div>
-            <StackedBar
-              phases={LOST_PHASES}
-              totals={phaseTotals}
-              total={lostSum}
-              animateDelay={400}
-            />
-            <div className="mt-2">
-              <PhaseLegend
-                phases={LOST_PHASES}
+          {lostPhases.length > 0 ? (
+            <div className="border-t border-slate-200 pt-3 md:border-l md:border-t-0 md:pl-4 md:pt-0 dark:border-slate-800">
+              <div className={cn(LABEL_CHROME, "mb-1.5 flex justify-between font-semibold tracking-wider text-red-400/90")}>
+                <span>Perdas</span>
+                <AnimatedNumber value={lostSum} className="tabular-nums text-slate-600 dark:text-slate-300" />
+              </div>
+              <StackedBar
+                phases={lostPhases}
                 totals={phaseTotals}
                 total={lostSum}
-                animateDelay={480}
+                animateDelay={400}
               />
+              <div className="mt-2">
+                <PhaseLegend
+                  phases={lostPhases}
+                  totals={phaseTotals}
+                  total={lostSum}
+                  animateDelay={480}
+                />
+              </div>
             </div>
-          </div>
+          ) : null}
         </div>
       </Card>
 
@@ -1460,7 +1489,9 @@ function TeamView({
       >
         <div className="flex items-baseline justify-between gap-2">
           <h3 className="dash-heading">Por etapa · corretor</h3>
-          <p className="text-xs text-slate-400">Funil ativo · perdas separadas</p>
+          <p className="text-xs text-slate-400">
+            Funil ativo{lostPhases.length > 0 ? " · perdas separadas" : ""}
+          </p>
         </div>
         <div
           className="dash-table-wrap"
@@ -1484,41 +1515,58 @@ function TeamView({
                 >
                   Corretor
                 </th>
-                {activePhasesBeforeAttendance.map((p) => (
-                  <th
-                    key={p}
-                    rowSpan={2}
-                    scope="col"
-                    className="border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10"
-                    title={p}
-                  >
-                    {phaseHeaderLabel(p)}
-                  </th>
-                ))}
-                <th
-                  colSpan={ATTENDANCE_STATUS_PHASES.length}
-                  scope="colgroup"
-                  className="border-b border-slate-200 px-2.5 py-2 text-center text-[11px] font-semibold tracking-wide text-slate-600 dark:border-white/10 dark:text-slate-300"
-                >
-                  {ATTENDANCE_STATUS_GROUP_LABEL}
-                </th>
-                {activePhasesAfterAttendance.map((p, phaseIndex) => (
-                  <th
-                    key={p}
-                    rowSpan={2}
-                    scope="col"
-                    className={cn(
-                      "border-b border-slate-200 font-medium dark:border-white/10",
-                      phaseIndex === activePhasesAfterAttendance.length - 1
-                        ? BROKER_TABLE_PHASE_LAST
-                        : BROKER_TABLE_PHASE,
-                    )}
-                    title={p}
-                  >
-                    {phaseHeaderLabel(p)}
-                  </th>
-                ))}
-                {LOST_PHASES.map((p, phaseIndex) => (
+                {isEconomico
+                  ? activePhases.map((p) => (
+                      <th
+                        key={p}
+                        rowSpan={2}
+                        scope="col"
+                        className="border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10"
+                        title={p}
+                      >
+                        {phaseHeaderLabel(p)}
+                      </th>
+                    ))
+                  : null}
+                {!isEconomico ? (
+                  <>
+                    {activePhasesBeforeAttendance.map((p) => (
+                      <th
+                        key={p}
+                        rowSpan={2}
+                        scope="col"
+                        className="border-b border-slate-200 px-2.5 py-3 text-center font-medium dark:border-white/10"
+                        title={p}
+                      >
+                        {phaseHeaderLabel(p)}
+                      </th>
+                    ))}
+                    <th
+                      colSpan={ATTENDANCE_STATUS_PHASES.length}
+                      scope="colgroup"
+                      className="border-b border-slate-200 px-2.5 py-2 text-center text-[11px] font-semibold tracking-wide text-slate-600 dark:border-white/10 dark:text-slate-300"
+                    >
+                      {ATTENDANCE_STATUS_GROUP_LABEL}
+                    </th>
+                    {activePhasesAfterAttendance.map((p, phaseIndex) => (
+                      <th
+                        key={p}
+                        rowSpan={2}
+                        scope="col"
+                        className={cn(
+                          "border-b border-slate-200 font-medium dark:border-white/10",
+                          phaseIndex === activePhasesAfterAttendance.length - 1
+                            ? BROKER_TABLE_PHASE_LAST
+                            : BROKER_TABLE_PHASE,
+                        )}
+                        title={p}
+                      >
+                        {phaseHeaderLabel(p)}
+                      </th>
+                    ))}
+                  </>
+                ) : null}
+                {lostPhases.map((p, phaseIndex) => (
                   <th
                     key={p}
                     rowSpan={2}
@@ -1547,23 +1595,25 @@ function TeamView({
                   Ativo
                 </th>
               </tr>
-              <tr className="border-b border-slate-200 dark:border-white/10">
-                {ATTENDANCE_STATUS_PHASES.map((p, phaseIndex) => (
-                  <th
-                    key={p}
-                    scope="col"
-                    className={cn(
-                      "border-b border-slate-200 font-medium dark:border-white/10",
-                      phaseIndex === ATTENDANCE_STATUS_PHASES.length - 1
-                        ? BROKER_TABLE_PHASE_LAST
-                        : BROKER_TABLE_PHASE,
-                    )}
-                    title={p}
-                  >
-                    {phaseHeaderLabel(p)}
-                  </th>
-                ))}
-              </tr>
+              {!isEconomico ? (
+                <tr className="border-b border-slate-200 dark:border-white/10">
+                  {ATTENDANCE_STATUS_PHASES.map((p, phaseIndex) => (
+                    <th
+                      key={p}
+                      scope="col"
+                      className={cn(
+                        "border-b border-slate-200 font-medium dark:border-white/10",
+                        phaseIndex === ATTENDANCE_STATUS_PHASES.length - 1
+                          ? BROKER_TABLE_PHASE_LAST
+                          : BROKER_TABLE_PHASE,
+                      )}
+                      title={p}
+                    >
+                      {phaseHeaderLabel(p)}
+                    </th>
+                  ))}
+                </tr>
+              ) : null}
             </thead>
             <tbody>
               {members.map(({ member, active }, idx) => {
@@ -1599,13 +1649,13 @@ function TeamView({
                         </span>
                       </div>
                     </td>
-                    {ACTIVE_PHASES.map((p, phaseIndex) => {
+                    {activePhases.map((p, phaseIndex) => {
                       const v = memberPhaseValue(member, p, month);
                       return (
                         <td
                           key={p}
                           className={cn(
-                            phaseIndex === ACTIVE_PHASES.length - 1
+                            phaseIndex === activePhases.length - 1 && lostPhases.length === 0
                               ? BROKER_TABLE_PHASE_LAST
                               : BROKER_TABLE_PHASE,
                             v ? "text-slate-700 dark:text-slate-200" : "text-slate-500",
@@ -1615,7 +1665,7 @@ function TeamView({
                         </td>
                       );
                     })}
-                    {LOST_PHASES.map((p, phaseIndex) => {
+                    {lostPhases.map((p, phaseIndex) => {
                       const v = memberPhaseValue(member, p, month);
                       if (phaseIndex === 0) {
                         return (
@@ -1651,7 +1701,7 @@ function TeamView({
               {members.length === 0 && (
                 <tr>
                   <td
-                    colSpan={ACTIVE_PHASES.length + LOST_PHASES.length + 3}
+                    colSpan={activePhases.length + lostPhases.length + 3}
                     className="py-6 text-center text-slate-500"
                   >
                     Sem corretores nesta equipe.

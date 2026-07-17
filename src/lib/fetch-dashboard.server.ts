@@ -22,7 +22,7 @@ import {
 } from "@/lib/bitrix";
 import {
   DASHBOARD_YEAR,
-  createPlaceholderDashboard,
+  DASHBOARD_DATA_VERSION,
   emptyRosterForPipeline,
   emptyRosterFromTargets,
   type DashboardPayload,
@@ -37,10 +37,16 @@ import {
   type DashboardPipelineKey,
   type PipelineDepartmentTarget,
 } from "@/lib/access-control";
-import { isAttendanceStatusPhase, mapStageToPhase, type Phase } from "@/lib/phases";
+import {
+  isAttendanceStatusPhase,
+  mapStageToPhase,
+  mapStageToPhaseForPipeline,
+  type Phase,
+} from "@/lib/phases";
 import {
   MONTHS,
   TEAM_LEADER_NAMES,
+  getTeamLeaderSearchNames,
   normalizeMemberName,
   type Member,
   type MonthKey,
@@ -74,9 +80,11 @@ function getPipelineRuntime(pipeline: DashboardPipelineKey): PipelineRuntime {
   return next;
 }
 
+const DASHBOARD_CACHE_SCHEMA = DASHBOARD_DATA_VERSION;
+
 function dashboardCacheKey(pipeline: DashboardPipelineKey): string {
   const categoryId = getPipelineCategoryId(pipeline);
-  return `dashboard:${YEAR}:category:${categoryId}`;
+  return `dashboard:${YEAR}:category:${categoryId}:${DASHBOARD_CACHE_SCHEMA}`;
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
@@ -112,11 +120,78 @@ function userDepartmentIds(user: BitrixUser): string[] {
   return (Array.isArray(value) ? value : [value]).map(String).filter(Boolean);
 }
 
+function collectDepartmentDescendants(
+  departments: BitrixDepartment[],
+  rootId: string,
+): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const department of departments) {
+    const parent = String(department.PARENT ?? "0");
+    if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+    childrenByParent.get(parent)!.push(String(department.ID));
+  }
+
+  const ids = new Set<string>([rootId]);
+  const queue = [rootId];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    for (const childId of childrenByParent.get(current) ?? []) {
+      if (!ids.has(childId)) {
+        ids.add(childId);
+        queue.push(childId);
+      }
+    }
+  }
+  return ids;
+}
+
+function expandDirectDepartmentTeams(
+  departments: BitrixDepartment[],
+  targets: PipelineDepartmentTarget[],
+  direct: Map<string, string>,
+): void {
+  for (const target of targets) {
+    const rootIds = new Set<string>();
+    if (target.departmentId != null) {
+      rootIds.add(String(target.departmentId));
+    }
+    if (target.departmentName) {
+      for (const department of departments) {
+        if (departmentNamesMatch(department.NAME, target.departmentName)) {
+          rootIds.add(String(department.ID));
+        }
+      }
+    }
+
+    for (const rootId of rootIds) {
+      for (const departmentId of collectDepartmentDescendants(departments, rootId)) {
+        direct.set(departmentId, target.teamId);
+      }
+    }
+  }
+}
+
+function canonicalDepartmentName(name: string): string {
+  return normalizeName(name)
+    .replace(/[-–—]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function departmentNamesMatch(left: string, right: string): boolean {
+  return canonicalDepartmentName(left) === canonicalDepartmentName(right);
+}
+
+type DepartmentTeamMaps = {
+  direct: Map<string, string>;
+  resolved: Map<string, string>;
+};
+
 function resolveDepartmentTargets(
   departments: BitrixDepartment[],
   pipeline: DashboardPipelineKey,
   targetsOverride?: PipelineDepartmentTarget[],
-): Map<string, string> {
+): DepartmentTeamMaps {
   const targets = targetsOverride ?? getPipelineDepartments(pipeline);
   const byId = new Map(departments.map((department) => [String(department.ID), department]));
   const direct = new Map<string, string>();
@@ -130,23 +205,22 @@ function resolveDepartmentTargets(
     }
 
     if (target.departmentName) {
-      const normalizedTarget = normalizeName(target.departmentName);
       for (const department of departments) {
-        if (normalizeName(department.NAME) === normalizedTarget) {
+        if (departmentNamesMatch(department.NAME, target.departmentName)) {
           direct.set(String(department.ID), target.teamId);
         }
       }
     }
   }
 
+  expandDirectDepartmentTeams(departments, targets, direct);
+
   const missing = targets.filter((target) => {
     if (target.departmentId != null && direct.has(String(target.departmentId))) {
       return false;
     }
     if (target.departmentName) {
-      return !departments.some(
-        (department) => normalizeName(department.NAME) === normalizeName(target.departmentName!),
-      );
+      return !departments.some((department) => departmentNamesMatch(department.NAME, target.departmentName!));
     }
     return target.departmentId == null || !byId.has(String(target.departmentId));
   });
@@ -178,32 +252,177 @@ function resolveDepartmentTargets(
     if (teamId) resolved.set(departmentId, teamId);
   }
 
-  return resolved;
+  return { direct, resolved };
+}
+
+function resolveUserTeamId(
+  departmentIds: string[],
+  direct: Map<string, string>,
+  resolved: Map<string, string>,
+): string | undefined {
+  for (const departmentId of departmentIds) {
+    const teamId = direct.get(departmentId);
+    if (teamId) return teamId;
+  }
+  for (const departmentId of departmentIds) {
+    const teamId = resolved.get(departmentId);
+    if (teamId) return teamId;
+  }
+  return undefined;
+}
+
+function findDepartmentForTarget(
+  departments: BitrixDepartment[],
+  target: PipelineDepartmentTarget,
+): BitrixDepartment | undefined {
+  if (target.departmentId != null) {
+    return departments.find((department) => String(department.ID) === String(target.departmentId));
+  }
+  if (target.departmentName) {
+    return departments.find((department) => departmentNamesMatch(department.NAME, target.departmentName!));
+  }
+  return undefined;
+}
+
+function ensureDepartmentHeadsInUsers(
+  users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+  bitrixUsers: BitrixUser[],
+  departmentTargets: PipelineDepartmentTarget[],
+  departments: BitrixDepartment[],
+  base: string,
+): void {
+  const bitrixById = new Map(bitrixUsers.map((user) => [String(user.ID), user]));
+
+  for (const target of departmentTargets) {
+    const department = findDepartmentForTarget(departments, target);
+    const headId =
+      department?.UF_HEAD != null && department.UF_HEAD !== "" ? String(department.UF_HEAD) : undefined;
+    if (!headId || users.has(headId)) continue;
+
+    const headUser = bitrixById.get(headId);
+    if (!headUser) continue;
+
+    users.set(headId, {
+      id: headId,
+      name: userDisplayName(headUser) || `Usuário #${headId}`,
+      photoUrl: resolvePhotoUrl(headUser.PERSONAL_PHOTO, base),
+      teamId: target.teamId,
+    });
+  }
+}
+
+function namesMatchLeader(candidateName: string, leaderName: string): boolean {
+  const candidate = normalizeName(candidateName);
+  const leader = normalizeName(leaderName);
+  if (!candidate || !leader) return false;
+  if (candidate === leader) return true;
+  if (candidate.startsWith(`${leader} `) || leader.startsWith(`${candidate} `)) return true;
+
+  const leaderParts = leader.split(" ").filter(Boolean);
+  const candidateParts = candidate.split(" ").filter(Boolean);
+  if (leaderParts.length >= 2 && candidateParts.length >= 2) {
+    return leaderParts[0] === candidateParts[0] && leaderParts[1] === candidateParts[1];
+  }
+  return false;
+}
+
+function findUserByName(
+  users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+  leaderName: string,
+  teamId?: string,
+): { name: string; photoUrl?: string; id: string; teamId: string } | undefined {
+  const candidates = [...users.values()].filter((candidate) =>
+    namesMatchLeader(candidate.name, leaderName),
+  );
+  if (teamId) {
+    return candidates.find((candidate) => candidate.teamId === teamId) ?? candidates[0];
+  }
+  return candidates[0];
+}
+
+function findBitrixUserByLeaderName(
+  bitrixUsers: BitrixUser[],
+  leaderName: string,
+): BitrixUser | undefined {
+  return bitrixUsers.find((candidate) => namesMatchLeader(userDisplayName(candidate), leaderName));
+}
+
+function leaderFromBitrixUser(
+  bitrixUser: BitrixUser,
+  teamId: string,
+  base: string,
+  fallbackName?: string,
+): { name: string; photoUrl?: string; id: string; teamId: string } {
+  const id = String(bitrixUser.ID);
+  return {
+    id,
+    name: userDisplayName(bitrixUser) || fallbackName || `Usuário #${id}`,
+    photoUrl: resolvePhotoUrl(bitrixUser.PERSONAL_PHOTO, base),
+    teamId,
+  };
 }
 
 function assignTeamLeaders(
   teams: Team[],
   users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
+  bitrixUsers: BitrixUser[],
+  departmentTargets: PipelineDepartmentTarget[],
+  departments: BitrixDepartment[],
+  base: string,
 ): void {
+  const bitrixById = new Map(bitrixUsers.map((user) => [String(user.ID), user]));
+
   for (const team of teams) {
-    const leaderName = TEAM_LEADER_NAMES[team.id];
-    if (leaderName) {
-      const leader = [...users.values()].find(
-        (candidate) =>
-          candidate.teamId === team.id && normalizeName(candidate.name) === normalizeName(leaderName),
-      );
-      if (!leader) continue;
-      team.leader = {
-        bitrixId: leader.id,
-        name: leader.name,
-        photoUrl: leader.photoUrl,
-      };
+    const target = departmentTargets.find((candidate) => candidate.teamId === team.id);
+    const department = target ? findDepartmentForTarget(departments, target) : undefined;
+    const headId =
+      department?.UF_HEAD != null && department.UF_HEAD !== "" ? String(department.UF_HEAD) : undefined;
+    const leaderSearchNames = getTeamLeaderSearchNames(team.id);
+
+    let leader: { name: string; photoUrl?: string; id: string; teamId: string } | undefined;
+
+    if (headId) {
+      leader = users.get(headId) ?? undefined;
+      if (!leader) {
+        const headUser = bitrixById.get(headId);
+        if (headUser) {
+          leader = leaderFromBitrixUser(headUser, team.id, base);
+        }
+      }
+    }
+
+    if (!leader) {
+      for (const leaderName of leaderSearchNames) {
+        const broker = findUserByName(users, leaderName, team.id);
+        if (broker) {
+          leader = broker;
+          break;
+        }
+        const bitrixUser = findBitrixUserByLeaderName(bitrixUsers, leaderName);
+        if (bitrixUser) {
+          leader = leaderFromBitrixUser(bitrixUser, team.id, base, leaderName);
+          break;
+        }
+      }
+    }
+
+    if (!leader) {
+      const teamUsers = [...users.values()].filter((candidate) => candidate.teamId === team.id);
+      if (teamUsers.length === 1) {
+        leader = teamUsers[0];
+      } else if (teamUsers.length > 1 && leaderSearchNames.length === 0) {
+        leader = teamUsers[0];
+      }
+    }
+
+    if (!leader) {
+      const fallbackName = TEAM_LEADER_NAMES[team.id];
+      if (fallbackName) {
+        team.leader = { name: fallbackName };
+      }
       continue;
     }
 
-    const teamUsers = [...users.values()].filter((candidate) => candidate.teamId === team.id);
-    if (teamUsers.length === 0) continue;
-    const leader = teamUsers[0];
     team.leader = {
       bitrixId: leader.id,
       name: leader.name,
@@ -226,18 +445,56 @@ function statusMap(statuses: BitrixStatus[], categoryId?: number): Map<string, B
   return map;
 }
 
-function phaseForStage(stageId: string, stages: Map<string, BitrixStatus>): Phase {
-  const stage = stages.get(stageId);
-  const phaseByName = mapStageToPhase(stage?.NAME || stageId);
+function resolveStagePhase(
+  stage: BitrixStatus | undefined,
+  stageId: string,
+  pipeline: DashboardPipelineKey,
+): Phase | null {
+  const phaseByName = mapStageToPhaseForPipeline(stage?.NAME || stageId, pipeline);
   if (phaseByName) return phaseByName;
 
-  // Nenhum deal pode desaparecer do total por causa de uma etapa nova ou renomeada.
   const semantic = String(stage?.EXTRA?.SEMANTICS || stage?.SEMANTICS || "").toLowerCase();
+  if (pipeline === "economico") {
+    if (semantic === "success" || semantic === "s") return "Sucesso";
+    if (semantic === "failure" || semantic === "apology" || semantic === "f") {
+      return "Perda";
+    }
+    return "Primeiro contato";
+  }
+
+  // Nenhum deal pode desaparecer do total por causa de uma etapa nova ou renomeada.
   if (semantic === "success" || semantic === "s") return "Contratos Assinados";
   if (semantic === "failure" || semantic === "apology" || semantic === "f") {
     return "Negócios Perdidos";
   }
   return "Em Atendimento";
+}
+
+function buildStagePhaseMap(
+  stages: Map<string, BitrixStatus>,
+  pipeline: DashboardPipelineKey,
+): Map<string, Phase> {
+  const map = new Map<string, Phase>();
+  for (const [stageId, stage] of stages) {
+    const phase = resolveStagePhase(stage, stageId, pipeline);
+    if (phase) map.set(stageId, phase);
+  }
+  return map;
+}
+
+function phaseForStage(
+  stageId: string,
+  stages: Map<string, BitrixStatus>,
+  pipeline: DashboardPipelineKey,
+  stagePhaseMap: Map<string, Phase>,
+): Phase | null {
+  const cached = stagePhaseMap.get(stageId);
+  if (cached) return cached;
+
+  const stage = stages.get(stageId);
+  const phase = resolveStagePhase(stage, stageId, pipeline);
+  if (phase) stagePhaseMap.set(stageId, phase);
+  return phase;
 }
 
 function bump(matrix: Member["matrix"], phase: Phase, month: MonthKey) {
@@ -328,11 +585,14 @@ function ingestItems(
   teams: Team[],
   users: Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>,
   attendanceStatusById: Map<string, Phase>,
+  pipeline: DashboardPipelineKey,
+  stagePhaseMap: Map<string, Phase>,
 ): number {
   let ingested = 0;
   for (const item of items) {
     const stageId = item.STATUS_ID || item.STAGE_ID || "";
-    const phase = phaseForStage(stageId, stages);
+    const phase = phaseForStage(stageId, stages, pipeline, stagePhaseMap);
+    if (!phase) continue;
 
     const month = monthFromDate(item.DATE_CREATE);
     if (!month) continue; // mês fora do ano / sem data → não conta (fica em branco)
@@ -347,7 +607,9 @@ function ingestItems(
 
     const attendanceId = resolveEnumerationId(item[BITRIX_ATTENDANCE_STATUS_FIELD]);
     const attendancePhase = attendanceId ? attendanceStatusById.get(attendanceId) : null;
-    if (attendancePhase) {
+    const shouldCountAttendancePhase =
+      pipeline !== "economico" || attendancePhase === "Em Quarentena";
+    if (attendancePhase && attendancePhase !== phase && shouldCountAttendancePhase) {
       bump(member.matrix, attendancePhase, month);
     }
 
@@ -371,14 +633,16 @@ async function loadFromBitrix(pipeline: DashboardPipelineKey): Promise<Dashboard
   const departmentTargets =
     pipeline === "economico" ? buildEconomicoDepartmentTargets(departments) : getPipelineDepartments(pipeline);
   const teams = emptyRosterFromTargets(departmentTargets, pipeline);
-  const departmentTeams = resolveDepartmentTargets(departments, pipeline, departmentTargets);
+  const { direct: directDepartmentTeams, resolved: departmentTeams } = resolveDepartmentTargets(
+    departments,
+    pipeline,
+    departmentTargets,
+  );
   const users = new Map<string, { name: string; photoUrl?: string; id: string; teamId: string }>();
 
   for (const u of bitrixUsers) {
     const id = String(u.ID);
-    const teamId = userDepartmentIds(u)
-      .map((departmentId) => departmentTeams.get(departmentId))
-      .find((candidate): candidate is string => Boolean(candidate));
+    const teamId = resolveUserTeamId(userDepartmentIds(u), directDepartmentTeams, departmentTeams);
     if (!teamId) continue;
     users.set(id, {
       id,
@@ -388,7 +652,8 @@ async function loadFromBitrix(pipeline: DashboardPipelineKey): Promise<Dashboard
     });
   }
 
-  assignTeamLeaders(teams, users);
+  ensureDepartmentHeadsInUsers(users, bitrixUsers, departmentTargets, departments, base);
+  assignTeamLeaders(teams, users, bitrixUsers, departmentTargets, departments, base);
 
   if (users.size === 0) {
     throw new Error(
@@ -410,6 +675,7 @@ async function loadFromBitrix(pipeline: DashboardPipelineKey): Promise<Dashboard
     resolveAttendanceStatusPhaseMap(),
   ]);
   const stages = statusMap(dealStages, dealCategoryId);
+  const stagePhaseMap = buildStagePhaseMap(stages, pipeline);
 
   // Preenche IDs/fotos somente no roster do departamento real do usuário.
   for (const user of users.values()) {
@@ -425,7 +691,16 @@ async function loadFromBitrix(pipeline: DashboardPipelineKey): Promise<Dashboard
     }
   }
 
-  const ingestedDeals = ingestItems(deals, stages, teams, users, attendanceStatusById);
+  const ingestedDeals = ingestItems(
+    deals,
+    stages,
+    teams,
+    users,
+    attendanceStatusById,
+    pipeline,
+    stagePhaseMap,
+  );
+  applyActiveRosterFromBitrix(teams, users);
   if (ingestedDeals !== deals.length) {
     console.warn(
       `[dashboard] ${deals.length - ingestedDeals} deal(s) ignorado(s) — data inválida ou responsável fora do Focus`,
@@ -566,17 +841,12 @@ export async function getDashboardDataImpl(
     return cached.payload;
   }
 
-  if (runtime.dashboardRequest) {
-    try {
-      return await runtime.dashboardRequest;
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
-      return unavailablePayload(pipeline, reason);
-    }
+  try {
+    return await loadAndCacheDashboard(pipeline);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
+    return unavailablePayload(pipeline, reason);
   }
-
-  scheduleBackgroundRefresh(pipeline);
-  return createPlaceholderDashboard(pipeline);
 }
 
 export async function warmDashboardCacheHandler(

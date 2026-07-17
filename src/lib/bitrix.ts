@@ -41,6 +41,7 @@ export type BitrixFieldDefinition = {
 
 export type BitrixUser = {
   ID: string;
+  ACTIVE?: boolean | string | number;
   NAME?: string;
   LAST_NAME?: string;
   SECOND_NAME?: string;
@@ -52,6 +53,7 @@ export type BitrixDepartment = {
   ID: string | number;
   NAME: string;
   PARENT?: string | number;
+  UF_HEAD?: string | number;
 };
 
 export type BitrixStatus = {
@@ -94,6 +96,14 @@ export function resolvePhotoUrl(
 
 export function userDisplayName(u: BitrixUser): string {
   return [u.NAME, u.SECOND_NAME, u.LAST_NAME].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+}
+
+export function isBitrixUserActive(user: BitrixUser): boolean {
+  const value = user.ACTIVE;
+  if (value == null || value === "") return true;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  return !["false", "n", "no", "0"].includes(value.trim().toLowerCase());
 }
 
 /** Achata params aninhados no formato que o Bitrix REST espera (filter[>=DATE_CREATE]=...) */
@@ -252,12 +262,64 @@ async function bitrixListAll<T>(
   return all;
 }
 
+/**
+ * Lista itens do CRM por cursor de ID. O Bitrix pode ignorar offsets altos e
+ * repetir a mesma página; filtrar por >ID evita depender desse deslocamento.
+ */
+async function bitrixListAllById<T extends { ID: string | number }>(
+  method: string,
+  params: Record<string, unknown> = {},
+): Promise<T[]> {
+  const all: T[] = [];
+  const baseFilter =
+    params.filter && typeof params.filter === "object" && !Array.isArray(params.filter)
+      ? (params.filter as Record<string, unknown>)
+      : {};
+  const baseParams = { ...params };
+  delete baseParams.filter;
+  delete baseParams.order;
+  delete baseParams.start;
+
+  let lastId = "0";
+  for (;;) {
+    const batch = await bitrixCall<T[] | { items?: T[] }>(method, {
+      ...baseParams,
+      filter: { ...baseFilter, ">ID": lastId },
+      order: { ID: "ASC" },
+      start: -1,
+    });
+    const items = Array.isArray(batch) ? batch : (batch?.items ?? []);
+    if (items.length === 0) break;
+
+    let pageLastId = lastId;
+    for (const item of items) {
+      const itemId = String(item.ID ?? "");
+      if (!/^\d+$/.test(itemId) || BigInt(itemId) <= BigInt(pageLastId)) {
+        throw new Error(
+          `Bitrix ${method}: a paginação por ID não avançou depois do registro ${pageLastId}`,
+        );
+      }
+      pageLastId = itemId;
+    }
+
+    all.push(...items);
+    if (items.length < 50) break;
+    lastId = pageLastId;
+  }
+  return all;
+}
+
 export async function fetchDepartments(): Promise<BitrixDepartment[]> {
   return bitrixListAll<BitrixDepartment>("department.get", { sort: "ID", order: "ASC" });
 }
 
 export async function fetchUsers(): Promise<BitrixUser[]> {
-  return bitrixListAll<BitrixUser>("user.get", { sort: "ID", order: "ASC" });
+  const users = await bitrixListAll<BitrixUser>("user.get", {
+    FILTER: { ACTIVE: true },
+    sort: "ID",
+    order: "ASC",
+  });
+  return users.filter(isBitrixUserActive);
 }
 
 export async function fetchLeadStatuses(): Promise<BitrixStatus[]> {
@@ -326,13 +388,12 @@ export async function fetchLeadsInYear(
     : undefined;
   if (assignees && assignees.length === 0) return [];
 
-  const items = await bitrixListAll<BitrixLead>("crm.lead.list", {
+  const items = await bitrixListAllById<BitrixLead>("crm.lead.list", {
     select: ["ID", "TITLE", "STATUS_ID", "ASSIGNED_BY_ID", "DATE_CREATE", "DATE_MODIFY"],
     filter: {
       ...yearDateFilter(year),
       ...(assignees ? { "@ASSIGNED_BY_ID": assignees } : {}),
     },
-    order: { DATE_CREATE: "ASC" },
   });
   return items.filter((l) => isCreatedInYear(l.DATE_CREATE, year));
 }
@@ -347,7 +408,7 @@ export async function fetchDealsInYear(
     : undefined;
   if (assignees && assignees.length === 0) return [];
 
-  const items = await bitrixListAll<BitrixLead>("crm.deal.list", {
+  const items = await bitrixListAllById<BitrixLead>("crm.deal.list", {
     select: [
       "ID",
       "TITLE",
@@ -363,7 +424,6 @@ export async function fetchDealsInYear(
       ...(categoryId != null ? { CATEGORY_ID: categoryId } : {}),
       ...(assignees ? { "@ASSIGNED_BY_ID": assignees } : {}),
     },
-    order: { DATE_CREATE: "ASC" },
   });
   return items.filter(
     (deal) =>

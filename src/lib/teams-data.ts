@@ -1,7 +1,32 @@
-import { ACTIVE_PHASES, PHASES, type Phase } from "@/lib/phases";
+import {
+  ACTIVE_PHASES,
+  getActivePhases,
+  getLostPhases,
+  getPipelinePhases,
+  PHASES,
+  type Phase,
+} from "@/lib/phases";
+import type { DashboardPipelineKey } from "@/lib/access-control";
 
 export type { Phase } from "@/lib/phases";
-export { PHASES, ACTIVE_PHASES, LOST_PHASES, PHASE_COLORS, PHASE_SHORT_LABELS, isLostPhase, ATTENDANCE_STATUS_PHASES, ATTENDANCE_STATUS_GROUP_LABEL, ACTIVE_FUNNEL_LEGEND_SECTIONS } from "@/lib/phases";
+export {
+  PHASES,
+  ACTIVE_PHASES,
+  ECONOMICO_ACTIVE_PHASES,
+  LOST_PHASES,
+  ECONOMICO_LOST_PHASES,
+  PHASE_COLORS,
+  PHASE_SHORT_LABELS,
+  isLostPhase,
+  ATTENDANCE_STATUS_PHASES,
+  ATTENDANCE_STATUS_GROUP_LABEL,
+  ACTIVE_FUNNEL_LEGEND_SECTIONS,
+  ECONOMICO_FUNNEL_LEGEND_SECTIONS,
+  getActivePhases,
+  getLostPhases,
+  getPipelinePhases,
+  getFunnelLegendSections,
+} from "@/lib/phases";
 
 // Ano-calendário completo: o filtro do webhook limita os registros a 2026.
 export const MONTHS = [
@@ -99,6 +124,7 @@ export const FOCUS_ACTIVE_BY_TEAM: Record<string, readonly string[]> = {
   ],
   total: [
     "Carol Mello",
+    "Carlos Rogério Malta Cavalcante Filho",
     "Thales Costa Caribé Venceslau",
     "Anderson Soares Cabral",
     "Carla Patrícia de Melo Albuquerque",
@@ -146,39 +172,63 @@ export function memberPhaseValue(m: Member, p: Phase, month: MonthFilter): numbe
   return byMonth[month] ?? 0;
 }
 
-export function memberTotal(m: Member, month: MonthFilter): number {
-  return PHASES.reduce((a, p) => a + memberPhaseValue(m, p, month), 0);
+export function memberTotal(
+  m: Member,
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return getPipelinePhases(pipeline).reduce((a, p) => a + memberPhaseValue(m, p, month), 0);
 }
 
-export function memberActiveTotal(m: Member, month: MonthFilter): number {
-  return PHASES.filter((p) => p !== "Negócios Perdidos" && p !== "Prazos Perdidos").reduce(
-    (a, p) => a + memberPhaseValue(m, p, month),
-    0,
-  );
+export function memberActiveTotal(
+  m: Member,
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return getActivePhases(pipeline).reduce((a, p) => a + memberPhaseValue(m, p, month), 0);
 }
 
 export function teamPhaseTotal(t: Team, p: Phase, month: MonthFilter): number {
   return t.members.reduce((a, m) => a + memberPhaseValue(m, p, month), 0);
 }
 
-export function teamTotal(t: Team, month: MonthFilter): number {
-  return t.members.reduce((a, m) => a + memberTotal(m, month), 0);
+export function teamTotal(
+  t: Team,
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return t.members.reduce((a, m) => a + memberTotal(m, month, pipeline), 0);
 }
 
-export function teamActiveTotal(t: Team, month: MonthFilter): number {
-  return ACTIVE_PHASES.reduce((a, p) => a + teamPhaseTotal(t, p, month), 0);
+export function teamActiveTotal(
+  t: Team,
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return getActivePhases(pipeline).reduce((a, p) => a + teamPhaseTotal(t, p, month), 0);
 }
 
-export function grandTotal(teams: Team[], month: MonthFilter): number {
-  return teams.reduce((a, t) => a + teamTotal(t, month), 0);
+export function grandTotal(
+  teams: Team[],
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return teams.reduce((a, t) => a + teamTotal(t, month, pipeline), 0);
 }
 
-export function grandActiveTotal(teams: Team[], month: MonthFilter): number {
-  return teams.reduce((a, t) => a + teamActiveTotal(t, month), 0);
+export function grandActiveTotal(
+  teams: Team[],
+  month: MonthFilter,
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): number {
+  return teams.reduce((a, t) => a + teamActiveTotal(t, month, pipeline), 0);
 }
 
-export function monthlyTrend(teams: Team[]): { month: MonthKey; value: number }[] {
-  return MONTHS.map((m) => ({ month: m, value: grandTotal(teams, m) }));
+export function monthlyTrend(
+  teams: Team[],
+  pipeline: DashboardPipelineKey = "comercial_geral",
+): { month: MonthKey; value: number }[] {
+  return MONTHS.map((m) => ({ month: m, value: grandTotal(teams, m, pipeline) }));
 }
 
 const mk = (teamId: string, name: string, values: (number | null)[]): Member => {
@@ -257,7 +307,44 @@ export const TEAM_LEADER_NAMES: Record<string, string> = {
   elite: "Marianna Queiroz Rosal",
   lider: "Rafaela Góes",
   total: "Carol Mello",
+  domina: "Laura Santana",
+  imparaveis: "Flavio Everson Goberto",
+  legado: "Kerlayne Oliveira",
 };
+
+/** Variações de nome para localizar o líder no Bitrix */
+export const TEAM_LEADER_ALIASES: Record<string, string[]> = {
+  imparaveis: ["Flavio Everson"],
+  legado: ["Kerline Oliveira"],
+};
+
+export function getTeamLeaderSearchNames(teamId: string): string[] {
+  const primary = TEAM_LEADER_NAMES[teamId];
+  const aliases = TEAM_LEADER_ALIASES[teamId] ?? [];
+  return primary ? [primary, ...aliases] : aliases;
+}
+
+export function isTeamLeaderMember(team: Team, member: Member): boolean {
+  if (!team.leader) return false;
+  if (team.leader.bitrixId && member.bitrixId) {
+    return team.leader.bitrixId === member.bitrixId;
+  }
+  if (team.leader.name && member.name) {
+    return normalizeMemberName(team.leader.name) === normalizeMemberName(member.name);
+  }
+  return false;
+}
+
+/** Corretores ativos da equipe no Bitrix, sem o líder. */
+export function teamBrokerMembers(team: Team): Member[] {
+  return team.members.filter(
+    (member) => member.active !== false && !isTeamLeaderMember(team, member),
+  );
+}
+
+export function teamBrokerCount(team: Team): number {
+  return teamBrokerMembers(team).length;
+}
 
 export const STATIC_TEAMS: Team[] = [
   {

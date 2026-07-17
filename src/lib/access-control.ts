@@ -12,9 +12,56 @@ export const DASHBOARD_PAGES = [
   { key: "team:elite", label: "Focus Elite" },
   { key: "team:lider", label: "Focus Líder" },
   { key: "team:total", label: "Focus Total" },
+  { key: "team:imparaveis", label: "Imparáveis" },
+  { key: "team:domina", label: "Domina" },
+  { key: "team:legado", label: "Legado" },
+  { key: "team:lobos", label: "Lobos" },
 ] as const;
 
 export type DashboardPageKey = (typeof DASHBOARD_PAGES)[number]["key"];
+
+const COMERCIAL_PAGE_KEYS = [
+  "overview",
+  "team:elite",
+  "team:lider",
+  "team:total",
+] as const satisfies readonly DashboardPageKey[];
+
+const ECONOMICO_PAGE_KEYS = [
+  "overview",
+  "team:imparaveis",
+  "team:domina",
+  "team:legado",
+  "team:lobos",
+] as const satisfies readonly DashboardPageKey[];
+
+/** Páginas válidas para a esteira selecionada na gestão de acesso. */
+export function dashboardPageKeysForPipeline(
+  pipeline: UserPipelineAccessKey,
+): readonly DashboardPageKey[] {
+  if (pipeline === "ambas") {
+    return DASHBOARD_PAGES.map((page) => page.key);
+  }
+  if (pipeline === "economico") {
+    return ECONOMICO_PAGE_KEYS;
+  }
+  return COMERCIAL_PAGE_KEYS;
+}
+
+export function filterPagesForPipelineAccess<
+  T extends { key: DashboardPageKey; label: string },
+>(pages: T[], pipeline: UserPipelineAccessKey): T[] {
+  const allowed = new Set(dashboardPageKeysForPipeline(pipeline));
+  return pages.filter((page) => allowed.has(page.key));
+}
+
+export function prunePageKeysForPipeline(
+  pageKeys: Iterable<DashboardPageKey>,
+  pipeline: UserPipelineAccessKey,
+): DashboardPageKey[] {
+  const allowed = new Set(dashboardPageKeysForPipeline(pipeline));
+  return [...pageKeys].filter((key) => allowed.has(key));
+}
 
 export const DASHBOARD_PIPELINES = [
   { key: "comercial_geral", label: "Comercial Geral", bitrixCategoryId: 16 },
@@ -78,7 +125,6 @@ export type ManagedUserAccess = UserProfile & {
 
 export function teamIdToPageKey(teamId: string): DashboardPageKey | null {
   if (teamId === "overview") return "overview";
-  if (isPrimeiraChaveTeamId(teamId)) return "team:lider";
   const key = `team:${teamId}` as DashboardPageKey;
   return DASHBOARD_PAGES.some((page) => page.key === key) ? key : null;
 }
@@ -162,10 +208,7 @@ const PIPELINE_DEPARTMENTS: Record<DashboardPipelineKey, PipelineDepartmentTarge
     { teamId: "lider", teamLabel: "Focus Líder", departmentName: "Focus Líder" },
     { teamId: "total", teamLabel: "Focus Total", departmentName: "Focus Total" },
   ],
-  economico: [
-    { teamId: "elite", teamLabel: "Focus Elite", departmentName: "Focus Elite" },
-    { teamId: "total", teamLabel: "Focus Total", departmentName: "Focus Total" },
-  ],
+  economico: [],
 };
 
 /** Sub-equipes exibidas no placeholder da esteira Econômico antes do Bitrix carregar. */
@@ -216,6 +259,25 @@ export function slugifyTeamId(name: string): string {
     .slice(0, 32);
 }
 
+function normalizeDepartmentKey(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .trim();
+}
+
+/** Mantém IDs estáveis (imparaveis, domina…) mesmo se o nome no Bitrix variar. */
+export function teamIdForPrimeiraChaveDepartment(departmentName: string): string {
+  const key = normalizeDepartmentKey(departmentName);
+  const known = ECONOMICO_PRIMEIRA_CHAVE_TEAMS.find(
+    (team) =>
+      normalizeDepartmentKey(team.departmentName) === key ||
+      normalizeDepartmentKey(team.teamLabel) === key,
+  );
+  return known?.teamId ?? slugifyTeamId(departmentName);
+}
+
 export type BitrixDepartmentLike = {
   ID: string | number;
   NAME: string;
@@ -251,24 +313,16 @@ export function buildEconomicoDepartmentTargets(
     );
   }
 
-  return [
-    { teamId: "elite", teamLabel: "Focus Elite", departmentName: "Focus Elite" },
-    ...children.map((child) => ({
-      teamId: slugifyTeamId(child.NAME),
-      teamLabel: child.NAME.trim(),
-      departmentId: Number(child.ID),
-      departmentName: child.NAME,
-    })),
-    { teamId: "total", teamLabel: "Focus Total", departmentName: "Focus Total" },
-  ];
+  return children.map((child) => ({
+    teamId: teamIdForPrimeiraChaveDepartment(child.NAME),
+    teamLabel: child.NAME.trim(),
+    departmentId: Number(child.ID),
+    departmentName: child.NAME,
+  }));
 }
 
 export function getEconomicoPlaceholderTargets(): PipelineDepartmentTarget[] {
-  return [
-    { teamId: "elite", teamLabel: "Focus Elite", departmentName: "Focus Elite" },
-    ...ECONOMICO_PRIMEIRA_CHAVE_TEAMS,
-    { teamId: "total", teamLabel: "Focus Total", departmentName: "Focus Total" },
-  ];
+  return [...ECONOMICO_PRIMEIRA_CHAVE_TEAMS];
 }
 
 export function getPipelineDepartments(pipeline: DashboardPipelineKey): PipelineDepartmentTarget[] {
@@ -291,7 +345,7 @@ export function isTeamVisibleInPipeline(teamId: string, pipeline: DashboardPipel
   if (pipeline === "comercial_geral") {
     return COMERCIAL_TEAM_IDS.has(teamId);
   }
-  return teamId !== "lider";
+  return !COMERCIAL_TEAM_IDS.has(teamId);
 }
 
 export function getPipelineTeamIds(pipeline: DashboardPipelineKey): string[] {

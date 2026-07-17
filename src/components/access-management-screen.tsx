@@ -1,7 +1,14 @@
 import { ArrowLeft, Loader2, Save, Shield, Trash2, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DashboardPageKey, ManagedUserAccess, UserPipelineAccessKey } from "@/lib/access-control";
-import { DASHBOARD_PAGES, DEFAULT_PIPELINE_KEY, normalizeRoleRelation, pipelineAccessOptions } from "@/lib/access-control";
+import {
+  DASHBOARD_PAGES,
+  DEFAULT_PIPELINE_KEY,
+  filterPagesForPipelineAccess,
+  normalizeRoleRelation,
+  pipelineAccessOptions,
+  prunePageKeysForPipeline,
+} from "@/lib/access-control";
 import { useAccess } from "@/lib/access";
 import {
   Select,
@@ -128,6 +135,10 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
 
   const catalogPages = pages.length > 0 ? pages : DASHBOARD_PAGES;
   const catalogPipelines = pipelineAccessOptions(pipelines);
+  const newUserPages = useMemo(
+    () => filterPagesForPipelineAccess(catalogPages, newPipelineKey),
+    [catalogPages, newPipelineKey],
+  );
   const defaultRoleId = roles.find((role) => role.slug === "lider")?.id ?? roles[0]?.id ?? "";
 
   const loadUsers = useCallback(async () => {
@@ -169,6 +180,14 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
     }
   }, [defaultRoleId, newRoleId]);
 
+  useEffect(() => {
+    setNewPageKeys((current) => {
+      const pruned = prunePageKeysForPipeline(current, newPipelineKey);
+      if (pruned.length > 0) return new Set(pruned);
+      return new Set<DashboardPageKey>(["overview"]);
+    });
+  }, [newPipelineKey]);
+
   const roleById = useMemo(() => new Map(roles.map((role) => [role.id, role])), [roles]);
 
   function updateRole(userId: string, roleId: string) {
@@ -183,13 +202,22 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
   }
 
   function updatePipeline(userId: string, pipelineKey: UserPipelineAccessKey) {
-    setDrafts((current) => ({
-      ...current,
-      [userId]: {
-        ...current[userId],
-        pipelineKey,
-      },
-    }));
+    setDrafts((current) => {
+      const draft = current[userId];
+      if (!draft) return current;
+      const pageKeys = new Set(prunePageKeysForPipeline(draft.pageKeys, pipelineKey));
+      if (pageKeys.size === 0) {
+        pageKeys.add("overview");
+      }
+      return {
+        ...current,
+        [userId]: {
+          ...draft,
+          pipelineKey,
+          pageKeys,
+        },
+      };
+    });
     setSuccess(null);
   }
 
@@ -427,7 +455,7 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
                   Páginas do dashboard
                 </p>
                 <PageCheckboxGrid
-                  pages={catalogPages}
+                  pages={newUserPages}
                   selected={newPageKeys}
                   onToggle={toggleNewPage}
                   idPrefix="new-access"
@@ -538,7 +566,10 @@ export function AccessManagementScreen({ onBack }: AccessManagementScreenProps) 
                         Páginas do dashboard
                       </p>
                       <PageCheckboxGrid
-                        pages={catalogPages}
+                        pages={filterPagesForPipelineAccess(
+                          catalogPages,
+                          draft?.pipelineKey ?? user.pipeline_key,
+                        )}
                         selected={draft?.pageKeys ?? new Set()}
                         onToggle={(pageKey, checked) => togglePage(user.id, pageKey, checked)}
                         idPrefix={`user-${user.id}`}
