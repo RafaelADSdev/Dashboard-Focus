@@ -74,7 +74,7 @@ VITE_SUPABASE_ANON_KEY=sua_chave_anon
 # Servidor (criação de usuários pelo admin — não expor no cliente)
 SUPABASE_SERVICE_ROLE_KEY=sua_service_role_key
 
-# E-mails com bootstrap de administrador (opcional, separados por vírgula)
+# E-mails com bootstrap de administrador, separados por vírgula
 VITE_ADMIN_EMAILS=admin@empresa.com
 ```
 
@@ -84,7 +84,7 @@ VITE_ADMIN_EMAILS=admin@empresa.com
 | `VITE_SUPABASE_URL` | Sim** | URL do projeto Supabase |
 | `VITE_SUPABASE_ANON_KEY` | Sim** | Chave anon/public do Supabase |
 | `SUPABASE_SERVICE_ROLE_KEY` | Sim† | Service role para criar usuários no Auth (server only) |
-| `VITE_ADMIN_EMAILS` | Não | E-mails extras com perfil administrador no bootstrap |
+| `VITE_ADMIN_EMAILS` | Não | Única fonte dos e-mails com perfil administrador no bootstrap |
 
 \* Sem `BITRIX_WEBHOOK_URL` o app sobe com **dados locais** de demonstração.
 

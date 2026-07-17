@@ -20,10 +20,10 @@ export function getSupabaseServiceRoleKey(): string {
 
 export function parseServerAdminEmails(): Set<string> {
   const raw = process.env.VITE_ADMIN_EMAILS?.trim() ?? "";
-  const defaults = ["rafaelarcanjods@gmail.com", "rafaelarcanjods05@gmail.com"];
-  const fromEnv = raw
-    .split(",")
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
-  return new Set([...defaults, ...fromEnv]);
+  return new Set(
+    raw
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }

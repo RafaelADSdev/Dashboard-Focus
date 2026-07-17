@@ -127,12 +127,12 @@ async function detectPipelineMigrationPending(
 
 function parseAdminEmails(): Set<string> {
   const raw = import.meta.env.VITE_ADMIN_EMAILS?.trim() ?? "";
-  const defaults = ["rafaelarcanjods@gmail.com", "rafaelarcanjods05@gmail.com"];
-  const fromEnv = raw
-    .split(",")
-    .map((email: string) => email.trim().toLowerCase())
-    .filter(Boolean);
-  return new Set([...defaults, ...fromEnv]);
+  return new Set(
+    raw
+      .split(",")
+      .map((email: string) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
 }
 
 const ADMIN_EMAILS = parseAdminEmails();

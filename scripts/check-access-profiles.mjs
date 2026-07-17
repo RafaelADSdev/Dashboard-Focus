@@ -6,7 +6,19 @@ const key =
 
 const emails = process.argv.slice(2);
 if (emails.length === 0) {
-  emails.push("rafaelarcanjods@gmail.com", "rafaelarcanjods05@gmail.com");
+  emails.push(
+    ...(process.env.VITE_ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+if (emails.length === 0) {
+  console.error(
+    "Informe ao menos um e-mail ou configure VITE_ADMIN_EMAILS no ambiente.",
+  );
+  process.exit(1);
 }
 
 const supabase = createClient(url, key);

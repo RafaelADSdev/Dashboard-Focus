@@ -193,28 +193,5 @@ where not exists (
   select 1 from public.user_page_access a where a.user_id = p.id
 );
 
--- Bootstrap: administrador principal com acesso total
-do $$
-declare
-  admin_role_id uuid;
-  admin_user_id uuid;
-begin
-  select id into admin_role_id from public.app_roles where slug = 'administrador' limit 1;
-  select id into admin_user_id from auth.users where email in (
-    'rafaelarcanjods@gmail.com',
-    'rafaelarcanjods05@gmail.com'
-  ) limit 1;
-
-  if admin_user_id is not null and admin_role_id is not null then
-    insert into public.user_profiles (id, email, role_id)
-    select admin_user_id, u.email, admin_role_id
-    from auth.users u
-    where u.id = admin_user_id
-    on conflict (id) do update set role_id = excluded.role_id;
-
-    insert into public.user_page_access (user_id, page_key)
-    select admin_user_id, dp.key
-    from public.dashboard_pages dp
-    on conflict do nothing;
-  end if;
-end $$;
+-- O bootstrap administrativo é definido em runtime exclusivamente por
+-- VITE_ADMIN_EMAILS, sem contas pessoais fixadas nesta migration.
