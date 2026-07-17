@@ -457,7 +457,7 @@ function resolveStagePhase(
 
   const semantic = String(stage?.EXTRA?.SEMANTICS || stage?.SEMANTICS || "").toLowerCase();
   if (pipeline === "economico") {
-    if (semantic === "success" || semantic === "s") return "Sucesso";
+    if (semantic === "success" || semantic === "s") return "Contrato rodado";
     if (semantic === "failure" || semantic === "apology" || semantic === "f") {
       return "Perda";
     }

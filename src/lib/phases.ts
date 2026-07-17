@@ -89,6 +89,7 @@ export const ECONOMICO_ACTIVE_PHASES: Phase[] = [
   "Primeiro contato",
   "Aguardando Documentação",
   "Análise de Crédito",
+  "Crédito pré-aprovado",
   "Sucesso",
   "Em Quarentena",
   "Stand-by",
@@ -105,6 +106,7 @@ export const ECONOMICO_FUNNEL_LEGEND_SECTIONS: ActiveFunnelLegendSection[] = [
       "Primeiro contato",
       "Aguardando Documentação",
       "Análise de Crédito",
+      "Crédito pré-aprovado",
       "Sucesso",
     ],
   },
@@ -182,7 +184,7 @@ export const PHASE_SHORT_LABELS: Record<Phase, string> = {
   "Stand-by": "Stand-by",
   Perda: "Perda",
   Proposta: "Proposta",
-  "Contrato rodado": "Contrato",
+  "Contrato rodado": "Contrato rodado",
   Sucesso: "Sucesso",
 };
 
@@ -234,6 +236,7 @@ export function mapStageToEconomicoPhase(raw: string | null | undefined): Phase 
     perda: "Perda",
     proposta: "Proposta",
     "contrato rodado": "Contrato rodado",
+    contrato: "Contrato rodado",
     sucesso: "Sucesso",
   };
   if (exact[n]) return exact[n];
@@ -243,9 +246,10 @@ export function mapStageToEconomicoPhase(raw: string | null | undefined): Phase 
     [/stand\s*-?\s*by|standby/, "Stand-by"],
     [/negocio\s*perdid|perda|perdid[oa]s?|lose|junk|desqualif/, "Perda"],
     [/quarentena/, "Em Quarentena"],
-    [/sucesso|ganh[oa]|won|fechad/, "Sucesso"],
     [/contrato\s*rodad|contrato\s*assinad/, "Contrato rodado"],
     [/credito\s*pre\s*-?\s*aprovad|pre\s*-?\s*aprovad/, "Crédito pré-aprovado"],
+    [/sucesso/, "Sucesso"],
+    [/ganh[oa]|won|fechad/, "Contrato rodado"],
     [/analise\s*de\s*credit|analise\s*credit/, "Análise de Crédito"],
     [/aguardando\s*document/, "Aguardando Documentação"],
     [/proposta/, "Proposta"],

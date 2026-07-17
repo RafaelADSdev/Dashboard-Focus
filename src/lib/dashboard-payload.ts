@@ -15,7 +15,7 @@ export type DashboardPayload = {
 export const DASHBOARD_YEAR = 2026;
 
 /** Incrementar quando a estrutura de fases ou ingestão do payload mudar. */
-export const DASHBOARD_DATA_VERSION = "economico-success-position-v14";
+export const DASHBOARD_DATA_VERSION = "economico-phases-v16";
 
 function rosterMembersForTarget(
   pipeline: DashboardPipelineKey,
