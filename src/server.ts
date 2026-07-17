@@ -51,18 +51,8 @@ async function handleWarmDashboardCron(request: Request): Promise<Response | und
   }
 
   const { warmDashboardCacheHandler } = await import("./lib/fetch-dashboard.server");
-  const pipelines = ["comercial_geral", "economico"] as const;
-  const results = await Promise.all(
-    pipelines.map((pipeline) => warmDashboardCacheHandler(pipeline)),
-  );
-  const failed = results.filter((result) => !result.ok);
-  if (failed.length === 0) {
-    return Response.json({ ok: true, pipelines: results }, { status: 200 });
-  }
-  return Response.json(
-    { ok: false, pipelines: results, reason: failed.map((r) => r.reason).join("; ") },
-    { status: 500 },
-  );
+  const result = await warmDashboardCacheHandler();
+  return Response.json(result, { status: result.ok ? 200 : 500 });
 }
 
 export default {

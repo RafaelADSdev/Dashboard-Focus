@@ -23,6 +23,7 @@ import {
 import {
   DASHBOARD_YEAR,
   DASHBOARD_DATA_VERSION,
+  createPlaceholderDashboard,
   emptyRosterForPipeline,
   emptyRosterFromTargets,
   type DashboardPayload,
@@ -58,6 +59,7 @@ const FRESH_CACHE_MS = 15 * 60 * 1_000;
 const STALE_CACHE_MS = 6 * 60 * 60 * 1_000;
 const CACHE_READ_TIMEOUT_MS = 4_000;
 const CACHE_WRITE_TIMEOUT_MS = 2_000;
+const FOREGROUND_LOAD_TIMEOUT_MS = 25_000;
 
 type DashboardCacheEntry = {
   cachedAt: number;
@@ -841,28 +843,39 @@ export async function getDashboardDataImpl(
     return cached.payload;
   }
 
-  try {
-    return await loadAndCacheDashboard(pipeline);
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
-    return unavailablePayload(pipeline, reason);
+  if (runtime.dashboardRequest) {
+    try {
+      return await withTimeout(runtime.dashboardRequest, FOREGROUND_LOAD_TIMEOUT_MS);
+    } catch {
+      // Ainda carregando no Bitrix; o cliente continua polling.
+    }
+  } else {
+    scheduleBackgroundRefresh(pipeline);
   }
+
+  return createPlaceholderDashboard(pipeline);
 }
 
 export async function warmDashboardCacheHandler(
-  pipeline: DashboardPipelineKey = DEFAULT_PIPELINE_KEY,
+  pipeline?: DashboardPipelineKey,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   resolveBitrixWebhookUrl();
   if (!hasBitrixWebhook()) {
     return { ok: false, reason: "BITRIX_WEBHOOK_URL não configurada" };
   }
 
+  const targets: DashboardPipelineKey[] = pipeline
+    ? [pipeline]
+    : ["comercial_geral", "economico"];
+
   try {
-    await loadAndCacheDashboard(pipeline);
+    for (const target of targets) {
+      await loadAndCacheDashboard(target);
+    }
     return { ok: true };
   } catch (error) {
     const reason = error instanceof Error ? error.message : "Erro ao consultar Bitrix";
-    console.warn(`[dashboard:${pipeline}] warm cache falhou:`, reason);
+    console.warn(`[dashboard] warm cache falhou:`, reason);
     return { ok: false, reason };
   }
 }

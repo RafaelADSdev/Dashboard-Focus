@@ -132,7 +132,7 @@ function flattenBitrixParams(
   return out;
 }
 
-const BITRIX_REQUEST_INTERVAL_MS = 650;
+const BITRIX_REQUEST_INTERVAL_MS = 500;
 const BITRIX_REQUEST_TIMEOUT_MS = 8_000;
 
 let bitrixQueue: Promise<void> = Promise.resolve();

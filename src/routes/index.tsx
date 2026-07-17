@@ -84,13 +84,6 @@ function readStoredPipeline(): DashboardPipelineKey | null {
 }
 
 export const Route = createFileRoute("/")({
-  loader: async ({ context: { queryClient } }) => {
-    try {
-      await queryClient.prefetchQuery(dashboardQueryOptions(DEFAULT_PIPELINE_KEY));
-    } catch {
-      // O dashboard usa placeholder local se o prefetch falhar no SSR.
-    }
-  },
   head: () => ({
     meta: [
       { title: "Dashboard Comercial — Focus" },
